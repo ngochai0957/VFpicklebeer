@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0E7C5B">
+    <title>VACIF PickleBeer — Team League &amp; Tỉ Số Trực Tiếp</title>
+    <meta name="description" content="Theo dõi trực tiếp bảng xếp hạng, lịch thi đấu, đội hình cố định và tỉ số từng set giải VACIF PickleBeer Team League.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./css/styles.css?v=20261119-7">
+    <script type="importmap">
+    {
+        "imports": {
+            "./js/config.js": "./js/config.js?v=20261119-7",
+            "./js/demo-data.js": "./js/demo-data.js?v=20261119-7",
+            "./js/store.js": "./js/store.js?v=20261119-7",
+            "./js/tournament-engine.js": "./js/tournament-engine.js?v=20261119-7",
+            "./js/ui-admin.js": "./js/ui-admin.js?v=20261119-7",
+            "./js/ui-public.js": "./js/ui-public.js?v=20261119-7"
+        }
+    }
+    </script>
+</head>
+<body>
+    <header id="nav-root" class="site-header"></header>
+
+    <main id="page-root">
+        <section id="hero-root" class="hero-wrap"></section>
+        <div id="main-root" class="main-container"></div>
+    </main>
+
+    <footer class="site-footer">
+        <div class="wrap footer-inner">
+            <span><strong>VACIF</strong> • PickleBeer Team League (Fixed Lineup)</span>
+            <span id="footer-sync-text"></span>
+        </div>
+    </footer>
+
+    <div id="modal-root"></div>
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <script type="module" src="./js/app.js?v=20261119-7"></script>
+</body>
+</html>
