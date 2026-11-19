@@ -1,12 +1,16 @@
 import {
-    buildCourtBoard,
+    calculatePairLeaderboard,
     calculatePairStats,
+    calculatePlayerLeaderboard,
     calculateStandings,
     escapeHtml,
     evaluateTeamMatch,
+    formatScheduleRaw,
     getSubMatchDisplayOrder,
     getSubMatchStatusRank,
-    normalizeConfig
+    getTeamMatchCourts,
+    normalizeConfig,
+    resolveSubMatchSchedule
 } from './tournament-engine.js';
 
 function formatSigned(num) {
@@ -122,6 +126,11 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
         return true;
     });
 
+    const matchCourts = getTeamMatchCourts(visibleSubs.length > 0 ? visibleSubs : evalTm.subMatches, tm);
+    const isMultiCourt = matchCourts.length > 1;
+    const headerCourtText = matchCourts.join(' · ');
+    const headerSchedText = formatScheduleRaw(tm.scheduled_time);
+
     const rowsHtml = visibleSubs.map((sm) => {
         const pairA = sm.pair_a_id ? pairsMap.get(sm.pair_a_id) : null;
         const pairB = sm.pair_b_id ? pairsMap.get(sm.pair_b_id) : null;
@@ -133,6 +142,18 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
         const isSubUpcoming = st === 'upcoming';
         const isSubCompleted = Boolean(ev.winner || st === 'completed');
         const boLabel = `Bo${ev.effectiveConfig.bestOf || 3}`;
+
+        const sched = resolveSubMatchSchedule(sm, tm);
+        const subMetaParts = [];
+        if (isMultiCourt || sched.hasCustomCourt) {
+            if (sched.court) subMetaParts.push(sched.court);
+        }
+        if (sched.hasCustomTime && sched.time) {
+            subMetaParts.push(sched.time);
+        }
+        const subSchedulePillHtml = subMetaParts.length > 0
+            ? `<span class="ppa-court-pill">${escapeHtml(subMetaParts.join(' · '))}</span>`
+            : '';
 
         const pairALabel = pairA?.pair_label || `${teamA.code}${sm.level_index}`;
         const pairBLabel = pairB?.pair_label || `${teamB.code}${sm.level_index}`;
@@ -174,6 +195,7 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
                     <div class="ppa-sub-head">
                         <span class="ppa-sub-division">${escapeHtml(levelLabel)} · Mixed Doubles</span>
                         <div class="ppa-sub-meta">
+                            ${subSchedulePillHtml}
                             <span class="ppa-bo-tag">${boLabel}</span>
                             ${stateBadge}
                         </div>
@@ -221,6 +243,7 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
                 <div class="ppa-sub-head">
                     <span class="ppa-sub-division">${escapeHtml(levelLabel)} · Mixed Doubles</span>
                     <div class="ppa-sub-meta">
+                        ${subSchedulePillHtml}
                         <span class="ppa-bo-tag">${boLabel}</span>
                         ${statusBadge}
                     </div>
@@ -250,8 +273,8 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
             <div class="tm-card-top">
                 <div class="tm-meta">
                     <span class="tag ${tm.stage === 'playoff' ? 'tag-playoff' : 'tag-round'}">${escapeHtml(tm.round_name)}</span>
-                    ${tm.court ? `<span>${escapeHtml(tm.court)}</span>` : ''}
-                    ${tm.scheduled_time ? `<span>· ${escapeHtml(tm.scheduled_time)}</span>` : ''}
+                    ${headerCourtText ? `<span>${escapeHtml(headerCourtText)}</span>` : ''}
+                    ${headerSchedText ? `<span>· ${escapeHtml(headerSchedText)}</span>` : ''}
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                     ${getStatusBadgeHtml(evalTm.effectiveStatus)}
@@ -344,10 +367,13 @@ export function renderLiveSpotlight(state, isAdmin, compact = true) {
             ? `<button type="button" class="link-btn" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Sửa tỉ số &rarr;</button>`
             : `<button type="button" class="link-btn" data-action="filter-round-btn" data-round="${escapeHtml(tm.round_name)}">Xem chi tiết &rarr;</button>`;
 
+        const courtText = getTeamMatchCourts(evalTm.subMatches, tm).join(' · ');
+        const schedText = formatScheduleRaw(tm.scheduled_time);
+
         return `
             <article class="live-mini-card">
                 <div class="live-mini-top">
-                    <span>${escapeHtml(tm.round_name)}${tm.court ? ` · ${escapeHtml(tm.court)}` : ''}</span>
+                    <span>${escapeHtml(tm.round_name)}${courtText ? ` · ${escapeHtml(courtText)}` : ''}${schedText ? ` · ${escapeHtml(schedText)}` : ''}</span>
                     <span class="tag tag-status-live"><span class="pulse-dot"></span>LIVE</span>
                 </div>
                 <div class="live-mini-teams">
@@ -444,15 +470,22 @@ export function renderStandingsTab(state, isAdmin) {
                 </div>
                 <div class="matches-stack">
                     ${playoffMatches.map((tm) => renderTeamMatchCard(tm, {
-                        teamsMap,
-                        pairsMap,
-                        subMatches: state.subMatches || [],
-                        config
-                    }, isAdmin)).join('')}
+            teamsMap,
+            pairsMap,
+            subMatches: state.subMatches || [],
+            config
+        }, isAdmin)).join('')}
                 </div>
             </div>
         `
         : '';
+
+    const pairTop = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config)[0];
+    const playerStats = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+    const scorerTop = playerStats.byPoints[0];
+    const errorTop = playerStats.byErrors[0];
+
+    const awardsPreview = renderAwardsCardsHtml(pairTop, scorerTop, errorTop, true);
 
     return `
         <section class="section-block">
@@ -490,69 +523,295 @@ export function renderStandingsTab(state, isAdmin) {
             </div>
 
             ${playoffSection}
+            ${awardsPreview}
         </section>
     `;
 }
 
-function renderCourtBoardView(state, context, isAdmin) {
-    const config = context.config;
-    const teamsMap = context.teamsMap;
-    const courts = buildCourtBoard(state.teamMatches, state.subMatches, config);
+function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = false) {
+    const pairContent = pairTop && pairTop.played > 0
+        ? `
+            <div class="award-winner-name">${escapeHtml(pairTop.playersText)}</div>
+            <div class="award-meta">
+                <span class="team-code-dot sm" style="background:${escapeHtml(pairTop.team.color)}">${escapeHtml(pairTop.team.code)}</span>
+                <span>${escapeHtml(pairTop.team.name)} · ${escapeHtml(pairTop.levelName)}</span>
+            </div>
+            <div class="award-stat-row tabular">
+                <strong>${pairTop.wins} thắng - ${pairTop.losses} thua</strong>
+                <span>HS ${formatSigned(pairTop.pointDiff)} (${pairTop.pointsFor}:${pairTop.pointsAgainst})</span>
+            </div>
+        `
+        : '<div class="section-sub">Chưa có cặp đấu nào hoàn thành.</div>';
 
-    if (courts.length === 0) {
-        return `<div class="card card-pad" style="text-align:center;color:var(--muted);">Chưa có trận đấu nào được phân sân.</div>`;
-    }
+    const scorerContent = scorerTop && scorerTop.totalPoints > 0
+        ? `
+            <div class="award-winner-name">${escapeHtml(scorerTop.name)}</div>
+            <div class="award-meta">
+                <span class="team-code-dot sm" style="background:${escapeHtml(scorerTop.team.color)}">${escapeHtml(scorerTop.team.code)}</span>
+                <span>${escapeHtml(scorerTop.team.name)} (${escapeHtml(scorerTop.pairLabel || '-')})</span>
+            </div>
+            <div class="award-stat-row tabular">
+                <strong>${scorerTop.totalPoints} điểm</strong>
+                <span>${scorerTop.matchesPlayed} trận · TB ${scorerTop.avgPoints}đ/trận</span>
+            </div>
+        `
+        : '<div class="section-sub">Chưa có điểm cá nhân nào được ghi nhận.</div>';
 
-    const cardsHtml = courts.map((c) => {
-        const renderSlot = (item, label, badgeHtml) => {
-            const tA = teamsMap.get(item.tm.team_a_id);
-            const tB = teamsMap.get(item.tm.team_b_id);
-            const ev = item.eval;
-            const editBtn = isAdmin
-                ? `<button type="button" class="link-btn" data-action="admin-edit-match" data-match-id="${escapeHtml(item.tm.id)}">Sửa tỉ số</button>`
-                : '';
+    const errorContent = errorTop && errorTop.totalErrors > 0
+        ? `
+            <div class="award-winner-name">${escapeHtml(errorTop.name)}</div>
+            <div class="award-meta">
+                <span class="team-code-dot sm" style="background:${escapeHtml(errorTop.team.color)}">${escapeHtml(errorTop.team.code)}</span>
+                <span>${escapeHtml(errorTop.team.name)} (${escapeHtml(errorTop.pairLabel || '-')})</span>
+            </div>
+            <div class="award-stat-row tabular">
+                <strong>${errorTop.totalErrors} lần Out/Lưới</strong>
+                <span>${errorTop.matchesPlayed} trận · TB ${errorTop.avgErrors}/trận</span>
+            </div>
+        `
+        : '<div class="section-sub">Chưa có thống kê đánh Out / rúc lưới.</div>';
 
-            return `
-                <div class="court-slot">
-                    <div class="court-slot-label">
-                        ${badgeHtml}
-                        <span>${escapeHtml(label)} · ${escapeHtml(item.tm.round_name)}${item.tm.scheduled_time ? ` (${escapeHtml(item.tm.scheduled_time)})` : ''}</span>
-                    </div>
-                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-                        <div style="font-weight:750;font-size:14px;color:var(--ink);">
-                            ${escapeHtml(tA?.name || '?')} <span style="color:var(--muted);font-weight:500;">vs</span> ${escapeHtml(tB?.name || '?')}
-                        </div>
-                        <div style="display:flex;align-items:center;gap:8px;">
-                            <strong class="tabular" style="font-size:16px;color:var(--primary);">${ev.subWinsA} : ${ev.subWinsB}</strong>
-                            ${editBtn}
-                        </div>
-                    </div>
+    const headHtml = includeHeader
+        ? `
+            <div class="section-header" style="margin-top:34px;">
+                <div>
+                    <h2 class="section-title">Giải Phụ &amp; Thống Kê Cá Nhân</h2>
+                    <span class="section-sub">Tổng hợp tất cả các trận · Chốt danh hiệu cuối giải</span>
                 </div>
-            `;
-        };
+                <button type="button" class="link-btn" data-action="switch-tab" data-tab="awards">Xem Bảng Point &amp; Chi tiết &rarr;</button>
+            </div>
+        `
+        : '';
 
-        const liveHtml = c.live.map((item) => renderSlot(item, 'Đang thi đấu', '<span class="pulse-dot"></span>')).join('');
-        const nextUp = c.upcoming[0] ? renderSlot(c.upcoming[0], 'Sắp lên sân (Next Up)', '<span class="tag tag-round" style="padding:1px 7px;font-size:10px;">NEXT</span>') : '';
-        const queued = c.upcoming.slice(1).map((item) => renderSlot(item, 'Chờ sau đó', '')).join('');
-        const emptyNotice = (!liveHtml && !nextUp && !queued)
-            ? `<div class="court-slot"><span class="section-sub">Đã hoàn thành toàn bộ ${c.completed.length} trận trên sân này.</span></div>`
-            : '';
-
-        return `
-            <article class="court-card">
-                <div class="court-card-head">
-                    <span>${escapeHtml(c.court)}</span>
-                    <span class="tag tag-round">${c.live.length} Live · ${c.upcoming.length} Chờ · ${c.completed.length} Xong</span>
-                </div>
-                ${liveHtml}
-                ${nextUp}
-                ${queued}
-                ${emptyNotice}
+    return `
+        ${headHtml}
+        <div class="awards-cards-grid">
+            <article class="award-card award-pair">
+                <div class="award-kicker">Cặp Đôi Ăn Ý</div>
+                <div class="award-criteria">Thắng nhiều nhất &rarr; Hiệu số điểm</div>
+                ${pairContent}
             </article>
+            <article class="award-card award-scorer">
+                <div class="award-kicker">Cá Nhân Ghi Nhiều Điểm Nhất</div>
+                <div class="award-criteria">Tính tất cả điểm VĐV ghi (bất kể Team thắng/thua)</div>
+                ${scorerContent}
+            </article>
+            <article class="award-card award-error">
+                <div class="award-kicker">Thống Kê Đánh Out / Lưới</div>
+                <div class="award-criteria">Tổng bóng đánh Out &amp; không qua lưới</div>
+                ${errorContent}
+            </article>
+        </div>
+    `;
+}
+
+export function renderAwardsTab(state, filters = {}) {
+    const config = normalizeConfig(state.tournament?.config);
+    const teams = [...(state.teams || [])].sort((a, b) => (a.seed_order ?? 0) - (b.seed_order ?? 0));
+    const pairRowsAll = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+    const playerBoard = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+
+    const teamFilter = filters.teamId || 'all';
+    const queryNorm = normalizeQuery(filters.query || '');
+
+    const filterPair = (r) => {
+        if (teamFilter !== 'all' && r.team.id !== teamFilter) return false;
+        if (queryNorm) {
+            const hay = normalizeQuery(`${r.playersText} ${r.pair.pair_label} ${r.team.name} ${r.levelName}`);
+            if (!hay.includes(queryNorm)) return false;
+        }
+        return true;
+    };
+    const filterPlayer = (p) => {
+        if (teamFilter !== 'all' && p.team.id !== teamFilter) return false;
+        if (queryNorm) {
+            const hay = normalizeQuery(`${p.name} ${p.pairLabel} ${p.team.name}`);
+            if (!hay.includes(queryNorm)) return false;
+        }
+        return true;
+    };
+
+    const filteredPairs = pairRowsAll.filter(filterPair);
+    const filteredPoints = playerBoard.byPoints.filter(filterPlayer);
+    const filteredErrors = playerBoard.byErrors.filter(filterPlayer);
+
+    const pairTableRows = filteredPairs.map((r) => {
+        const diffCls = r.pointDiff > 0 ? 'diff-pos' : (r.pointDiff < 0 ? 'diff-neg' : 'diff-zero');
+        const winnerBadge = r.rank === 1 && r.played > 0 ? '<span class="award-inline-badge">Cặp ăn ý #1</span>' : '';
+        return `
+            <tr>
+                <td><span class="rank-pill ${r.rank <= 3 ? `rank-${r.rank}` : ''}">${r.rank}</span></td>
+                <td class="col-left">
+                    <strong>${escapeHtml(r.playersText)}</strong> ${winnerBadge}
+                </td>
+                <td class="col-left">
+                    <span class="team-code-dot sm" style="background:${escapeHtml(r.team.color)}">${escapeHtml(r.team.code)}</span>
+                    <span style="margin-left:6px;">${escapeHtml(r.team.name)} · ${escapeHtml(r.levelName)}</span>
+                </td>
+                <td class="tabular">${r.played}</td>
+                <td class="tabular"><strong>${r.wins}W</strong> - ${r.losses}L</td>
+                <td class="tabular">${r.setsWon} - ${r.setsLost}</td>
+                <td class="tabular">${r.pointsFor} : ${r.pointsAgainst}</td>
+                <td class="tabular"><span class="${diffCls}">${formatSigned(r.pointDiff)}</span></td>
+            </tr>
         `;
     }).join('');
 
-    return `<div class="court-board-grid">${cardsHtml}</div>`;
+    const buildMatchChipsHtml = (logs, metricKey) => {
+        if (!logs || logs.length === 0) return '<span class="section-sub">Chưa thi đấu</span>';
+        return logs.map((log) => {
+            const val = log[metricKey];
+            const cls = metricKey === 'points' ? 'pts' : 'errs';
+            const prefix = metricKey === 'points' ? `+${val}đ` : `${val} lỗi`;
+            return `
+                <span class="match-log-pill ${cls}" title="${escapeHtml(log.roundName)} (${escapeHtml(log.scoreSummary)})">
+                    <span>${escapeHtml(log.roundName)} vs ${escapeHtml(log.opponentLabel)}:</span>
+                    <strong>${prefix}</strong>
+                </span>
+            `;
+        }).join('');
+    };
+
+    const pointsRows = filteredPoints.map((p) => {
+        const badge = p.rank === 1 && p.totalPoints > 0 ? '<span class="award-inline-badge pts">Top Scorer</span>' : '';
+        return `
+            <tr>
+                <td><span class="rank-pill ${p.rank <= 3 ? `rank-${p.rank}` : ''}">${p.rank}</span></td>
+                <td class="col-left"><strong>${escapeHtml(p.name)}</strong> ${badge}</td>
+                <td class="col-left">
+                    <span class="team-code-dot sm" style="background:${escapeHtml(p.team.color)}">${escapeHtml(p.team.code)}</span>
+                    <span style="margin-left:6px;">${escapeHtml(p.team.code)} · ${escapeHtml(p.pairLabel || '-')}</span>
+                </td>
+                <td class="tabular">${p.matchesPlayed}</td>
+                <td class="tabular"><span class="stat-highlight">${p.totalPoints}</span></td>
+                <td class="tabular">${p.avgPoints}</td>
+                <td class="col-left"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'points')}</div></td>
+            </tr>
+        `;
+    }).join('');
+
+    const errorsRows = filteredErrors.map((p) => {
+        const badge = p.rank === 1 && p.totalErrors > 0 ? '<span class="award-inline-badge errs">Nhiều Out nhất</span>' : '';
+        return `
+            <tr>
+                <td><span class="rank-pill ${p.rank === 1 ? 'rank-err' : ''}">${p.rank}</span></td>
+                <td class="col-left"><strong>${escapeHtml(p.name)}</strong> ${badge}</td>
+                <td class="col-left">
+                    <span class="team-code-dot sm" style="background:${escapeHtml(p.team.color)}">${escapeHtml(p.team.code)}</span>
+                    <span style="margin-left:6px;">${escapeHtml(p.team.code)} · ${escapeHtml(p.pairLabel || '-')}</span>
+                </td>
+                <td class="tabular">${p.matchesPlayed}</td>
+                <td class="tabular"><strong style="color:var(--crimson);font-size:16px;">${p.totalErrors}</strong></td>
+                <td class="tabular">${p.avgErrors}</td>
+                <td class="col-left"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'errors')}</div></td>
+            </tr>
+        `;
+    }).join('');
+
+    const teamSelectOptions = teams
+        .map((t) => `<option value="${escapeHtml(t.id)}" ${teamFilter === t.id ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
+        .join('');
+    const searchIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+
+    return `
+        <section class="section-block">
+            <div class="section-header">
+                <div>
+                    <h2 class="section-title">Giải Phụ Cặp Đôi &amp; Bảng Point Cá Nhân</h2>
+                    <span class="section-sub">Tổng hợp tất cả các trận trong giải (vòng tròn + playoff) và chốt giải ở trận cuối</span>
+                </div>
+            </div>
+
+            ${renderAwardsCardsHtml(pairRowsAll[0], playerBoard.byPoints[0], playerBoard.byErrors[0], false)}
+
+            <div class="filter-bar" style="margin-top:22px;">
+                <div class="search-input-wrap">
+                    ${searchIcon}
+                    <input id="awards-search-input" type="search" class="search-input" data-action="awards-filter-query" value="${escapeHtml(filters.query || '')}" placeholder="Tìm tên VĐV, cặp đấu, đội...">
+                </div>
+                <select class="select-clean" data-action="awards-filter-team" aria-label="Lọc theo đội">
+                    <option value="all">Mọi đội</option>
+                    ${teamSelectOptions}
+                </select>
+            </div>
+
+            <div class="section-header" style="margin-top:18px;">
+                <h3 class="section-title" style="font-size:19px;">1. BXH Cặp Đôi Ăn Ý</h3>
+                <span class="section-sub">Xếp hạng: Trận cặp thắng &rarr; Hiệu số điểm &rarr; Hiệu số Set</span>
+            </div>
+            <div class="card">
+                <div class="table-wrap">
+                    <table class="standings-table">
+                        <thead>
+                            <tr>
+                                <th style="width:54px;">#</th>
+                                <th class="col-left">Cặp Đôi</th>
+                                <th class="col-left">Đội &amp; Level</th>
+                                <th>Đã đấu</th>
+                                <th>Thắng - Thua</th>
+                                <th>Set</th>
+                                <th>Điểm (Ghi:Thua)</th>
+                                <th>HS Điểm</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${pairTableRows || '<tr><td colspan="8" style="padding:24px;color:var(--muted);">Chưa có dữ liệu cặp đấu.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="section-header" style="margin-top:28px;">
+                <h3 class="section-title" style="font-size:19px;">2. Bảng Point Cá Nhân</h3>
+                <span class="section-sub">Tính mọi điểm VĐV ghi trực tiếp, bất kể đội thắng hay thua</span>
+            </div>
+            <div class="card">
+                <div class="table-wrap">
+                    <table class="standings-table">
+                        <thead>
+                            <tr>
+                                <th style="width:54px;">#</th>
+                                <th class="col-left">VĐV</th>
+                                <th class="col-left">Đội · Cặp</th>
+                                <th>Trận</th>
+                                <th>Tổng Điểm</th>
+                                <th>TB/Trận</th>
+                                <th class="col-left">Chi Tiết Điểm Sau Mỗi Trận</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${pointsRows || '<tr><td colspan="7" style="padding:24px;color:var(--muted);">Chưa có điểm cá nhân nào được ghi nhận.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="section-header" style="margin-top:28px;">
+                <h3 class="section-title" style="font-size:19px;">3. Thống Kê Đánh Out &amp; Không Qua Lưới</h3>
+                <span class="section-sub">Tổng hợp số lỗi tự đánh hỏng (Out + Lưới) qua từng trận</span>
+            </div>
+            <div class="card">
+                <div class="table-wrap">
+                    <table class="standings-table">
+                        <thead>
+                            <tr>
+                                <th style="width:54px;">#</th>
+                                <th class="col-left">VĐV</th>
+                                <th class="col-left">Đội · Cặp</th>
+                                <th>Trận</th>
+                                <th>Tổng Out/Lưới</th>
+                                <th>TB/Trận</th>
+                                <th class="col-left">Chi Tiết Từng Trận</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${errorsRows || '<tr><td colspan="7" style="padding:24px;color:var(--muted);">Chưa có thống kê đánh Out / Lưới.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    `;
 }
 
 function renderRoundSummaryTable(allMatches, context, activeRound = 'all') {
@@ -615,7 +874,6 @@ export function renderMatchesTab(state, filters, isAdmin) {
     const teamsMap = new Map((state.teams || []).map((t) => [t.id, t]));
     const pairsMap = new Map((state.teamPairs || []).map((p) => [p.id, p]));
     const context = { teamsMap, pairsMap, subMatches: state.subMatches || [], config };
-    const viewMode = filters.view || 'list';
     const queryNorm = normalizeQuery(filters.query || '');
 
     const allMatches = [...(state.teamMatches || [])].sort((a, b) => {
@@ -640,11 +898,14 @@ export function renderMatchesTab(state, filters, isAdmin) {
             const tA = teamsMap.get(tm.team_a_id);
             const tB = teamsMap.get(tm.team_b_id);
             const haystackParts = [
-                tA?.name, tA?.code, tB?.name, tB?.code, tm.court, tm.round_name
+                tA?.name, tA?.code, tB?.name, tB?.code, tm.court, formatScheduleRaw(tm.scheduled_time), tm.round_name
             ];
             for (const sm of ev.subMatches) {
                 const pA = sm.pair_a_id ? pairsMap.get(sm.pair_a_id) : null;
                 const pB = sm.pair_b_id ? pairsMap.get(sm.pair_b_id) : null;
+                const smSched = resolveSubMatchSchedule(sm, tm);
+                if (smSched.court) haystackParts.push(smSched.court);
+                if (smSched.scheduleLabel) haystackParts.push(smSched.scheduleLabel);
                 if (pA) haystackParts.push(pA.pair_label, pA.player_1, pA.player_2);
                 if (pB) haystackParts.push(pB.pair_label, pB.player_1, pB.player_2);
             }
@@ -670,48 +931,37 @@ export function renderMatchesTab(state, filters, isAdmin) {
         <section class="section-block">
             <div class="section-header">
                 <h2 class="section-title">Lịch &amp; Kết Quả</h2>
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                    <div class="pill-group" role="group" aria-label="Chế độ xem">
-                        <button type="button" class="filter-pill ${viewMode === 'list' ? 'active' : ''}" data-action="matches-view" data-view="list">Danh sách trận</button>
-                        <button type="button" class="filter-pill ${viewMode === 'courts' ? 'active' : ''}" data-action="matches-view" data-view="courts">Điều phối Sân (Next Up)</button>
+            </div>
+
+            <div class="filter-bar">
+                <div class="pill-group" role="group" aria-label="Lọc theo vòng">
+                    ${roundPills}
+                </div>
+
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <div class="search-input-wrap">
+                        ${searchIcon}
+                        <input id="matches-search-input" type="search" class="search-input" data-action="filter-query" value="${escapeHtml(filters.query || '')}" placeholder="Tìm tên VĐV, cặp, đội...">
                     </div>
+
+                    <div class="pill-group" role="group" aria-label="Lọc theo trạng thái">
+                        <button type="button" class="filter-pill ${filters.status === 'all' ? 'active' : ''}" data-action="filter-status" data-value="all">Tất cả</button>
+                        <button type="button" class="filter-pill ${filters.status === 'live' ? 'active' : ''}" data-action="filter-status" data-value="live">Live</button>
+                        <button type="button" class="filter-pill ${filters.status === 'completed' ? 'active' : ''}" data-action="filter-status" data-value="completed">Đã xong</button>
+                        <button type="button" class="filter-pill ${filters.status === 'upcoming' ? 'active' : ''}" data-action="filter-status" data-value="upcoming">Sắp đấu</button>
+                    </div>
+
+                    <select class="select-clean" data-action="filter-team" aria-label="Lọc theo đội">
+                        <option value="all">Mọi đội</option>
+                        ${teamSelectOptions}
+                    </select>
                 </div>
             </div>
 
-            ${viewMode === 'courts'
-                ? renderCourtBoardView(state, context, isAdmin)
-                : `
-                    <div class="filter-bar">
-                        <div class="pill-group" role="group" aria-label="Lọc theo vòng">
-                            ${roundPills}
-                        </div>
-
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                            <div class="search-input-wrap">
-                                ${searchIcon}
-                                <input id="matches-search-input" type="search" class="search-input" data-action="filter-query" value="${escapeHtml(filters.query || '')}" placeholder="Tìm tên VĐV, cặp, đội...">
-                            </div>
-
-                            <div class="pill-group" role="group" aria-label="Lọc theo trạng thái">
-                                <button type="button" class="filter-pill ${filters.status === 'all' ? 'active' : ''}" data-action="filter-status" data-value="all">Tất cả</button>
-                                <button type="button" class="filter-pill ${filters.status === 'live' ? 'active' : ''}" data-action="filter-status" data-value="live">Live</button>
-                                <button type="button" class="filter-pill ${filters.status === 'completed' ? 'active' : ''}" data-action="filter-status" data-value="completed">Đã xong</button>
-                                <button type="button" class="filter-pill ${filters.status === 'upcoming' ? 'active' : ''}" data-action="filter-status" data-value="upcoming">Sắp đấu</button>
-                            </div>
-
-                            <select class="select-clean" data-action="filter-team" aria-label="Lọc theo đội">
-                                <option value="all">Mọi đội</option>
-                                ${teamSelectOptions}
-                            </select>
-                        </div>
-                    </div>
-
-                    ${filtered.length > 0
-                        ? `<div class="matches-stack">${filtered.map((tm) => renderTeamMatchCard(tm, context, isAdmin, { liveOnly: filters.status === 'live' })).join('')}</div>`
-                        : `<div class="card card-pad" style="text-align:center;color:var(--muted);">Không có trận đấu nào khớp tìm kiếm hoặc bộ lọc hiện tại.</div>`
-                    }
-                `
-            }
+            ${filtered.length > 0
+            ? `<div class="matches-stack">${filtered.map((tm) => renderTeamMatchCard(tm, context, isAdmin, { liveOnly: filters.status === 'live' })).join('')}</div>`
+            : `<div class="card card-pad" style="text-align:center;color:var(--muted);">Không có trận đấu nào khớp tìm kiếm hoặc bộ lọc hiện tại.</div>`
+        }
         </section>
     `;
 }

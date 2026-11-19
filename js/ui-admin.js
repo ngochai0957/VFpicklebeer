@@ -3,8 +3,13 @@ import {
     escapeHtml,
     evaluateSubMatch,
     evaluateTeamMatch,
+    formatScheduleRaw,
     getSubMatchDisplayOrder,
-    normalizeConfig
+    getTeamMatchCourts,
+    normalizeConfig,
+    normalizeRallyState,
+    normalizeSetPlayerStats,
+    parseScheduleValue
 } from './tournament-engine.js';
 
 export function renderAdminLoginModal(storeMode, errorMessage = '') {
@@ -61,6 +66,58 @@ export function renderAdminLoginModal(storeMode, errorMessage = '') {
     `;
 }
 
+function buildPlayerStatSideHtml(subId, setIdx, playersMeta, statsRow, teamColor, sideTitle, rallyState = {}, sideKey = 'a') {
+    const metaBySlot = new Map(playersMeta.map(([name, slot]) => [slot, name]));
+    const rawOrder = sideKey === 'a' ? rallyState.orderA : rallyState.orderB;
+    const defaultSlots = playersMeta.map(([, slot]) => slot);
+    const orderedSlots = Array.isArray(rawOrder) && rawOrder.length === defaultSlots.length
+        ? rawOrder
+        : defaultSlots;
+
+    const rows = orderedSlots.map((slotKey, posIdx) => {
+        const playerName = metaBySlot.get(slotKey) || slotKey;
+        const entry = statsRow[slotKey] || { points: 0, errors: 0 };
+        const isServer = rallyState.serverSlot === slotKey;
+        const isReceiver = rallyState.receiverSlot === slotKey;
+        const rowClass = isServer ? 'is-server' : (isReceiver ? 'is-receiver' : '');
+        const posLabel = posIdx === 0 ? '1 · Phải' : '2 · Trái';
+        return `
+            <div class="player-stat-row ${rowClass}">
+                <div class="player-stat-identity">
+                    <span class="court-pos-badge ${posIdx === 0 ? 'right-court' : 'left-court'}" title="${posIdx === 0 ? 'Vị trí 1 (Phải / Ô chẵn)' : 'Vị trí 2 (Trái / Ô lẻ)'}">${posLabel}</span>
+                    <span class="player-stat-name" style="border-left:3px solid ${escapeHtml(teamColor)};">${escapeHtml(playerName)}</span>
+                    <div class="player-role-chips">
+                        <button type="button" class="rally-role-btn ${isServer ? 'is-server' : ''}" data-action="select-rally-role" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-role="server" data-slot="${slotKey}" aria-pressed="${isServer ? 'true' : 'false'}" title="Chọn làm người phát bóng">🎾 Phát</button>
+                        <button type="button" class="rally-role-btn ${isReceiver ? 'is-receiver' : ''}" data-action="select-rally-role" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-role="receiver" data-slot="${slotKey}" aria-pressed="${isReceiver ? 'true' : 'false'}" title="Chọn làm người đỡ bóng">🛡 Đỡ</button>
+                    </div>
+                </div>
+                <div class="player-stat-readouts">
+                    <span class="stat-pill pts tabular" title="Điểm cá nhân VĐV (tự động tăng qua nút pha bóng)">
+                        <span class="stat-lbl">Điểm</span>
+                        <strong>${entry.points}</strong>
+                    </span>
+                    <span class="stat-pill errs tabular" title="Out / Không qua lưới (tự động tăng qua nút pha bóng)">
+                        <span class="stat-lbl">Out/Lưới</span>
+                        <strong>${entry.errors}</strong>
+                    </span>
+                </div>
+            </div>
+        `;
+    }).join('');
+    return `
+        <div class="set-player-side">
+            <div class="set-player-side-head">
+                <span class="set-player-side-title">${escapeHtml(sideTitle)}</span>
+                ${orderedSlots.length > 1
+            ? `<button type="button" class="btn-swap-court" data-action="swap-court-order" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-side="${escapeHtml(sideKey)}" title="Đổi vị trí 1 (Phải) ↔ 2 (Trái) cho cặp này">⇄ Đổi vị trí 1↔2</button>`
+            : ''
+        }
+            </div>
+            ${rows}
+        </div>
+    `;
+}
+
 function renderScoreOperatorSubtab(state, adminState) {
     const config = normalizeConfig(state.tournament?.config);
     const teamsMap = new Map((state.teams || []).map((t) => [t.id, t]));
@@ -106,6 +163,7 @@ function renderScoreOperatorSubtab(state, adminState) {
         const levelName = config.levelNames[sm.level_index - 1] || `Level ${sm.level_index}`;
         const ev = sm.eval;
         const sets = Array.isArray(sm.sets) && sm.sets.length > 0 ? sm.sets : [{ a: 0, b: 0 }];
+        const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
         const currentBestOf = sm.format_override?.bestOf ? String(sm.format_override.bestOf) : 'default';
         const currentPts = sm.format_override?.pointsPerSet ? String(sm.format_override.pointsPerSet) : 'default';
         const hasCustomOrder = getSubMatchDisplayOrder(sm) !== null;
@@ -117,6 +175,15 @@ function renderScoreOperatorSubtab(state, adminState) {
             ? `${pairB.pair_label} (${pairB.player_1}${pairB.player_2 ? ` / ${pairB.player_2}` : ''})`
             : `${teamB?.code || 'B'}${sm.level_index}`;
 
+        const sideAMeta = [
+            [pairA?.player_1 || `${pairA?.pair_label || 'A'} · VĐV 1`, 'a1'],
+            ...(pairA?.player_2 ? [[pairA.player_2, 'a2']] : [])
+        ];
+        const sideBMeta = [
+            [pairB?.player_1 || `${pairB?.pair_label || 'B'} · VĐV 1`, 'b1'],
+            ...(pairB?.player_2 ? [[pairB.player_2, 'b2']] : [])
+        ];
+
         const setsRowsHtml = sets.map((s, setIdx) => {
             const setWinner = ev.sets[setIdx]?.winner;
             const winBadge = setWinner === 'A'
@@ -125,40 +192,105 @@ function renderScoreOperatorSubtab(state, adminState) {
                     ? `<span class="tag tag-status-completed">${escapeHtml(pairB?.pair_label || 'B')} thắng Set ${setIdx + 1}</span>`
                     : `<span class="tag tag-round">Set ${setIdx + 1}</span>`);
 
+            const rowStats = setStats[setIdx];
+            const sumPtsA = rowStats.a1.points + rowStats.a2.points;
+            const sumPtsB = rowStats.b1.points + rowStats.b2.points;
+            const sumErrA = rowStats.a1.errors + rowStats.a2.errors;
+            const sumErrB = rowStats.b1.errors + rowStats.b2.errors;
+            const rallyKey = `${sm.id}:${setIdx}`;
+            const rallyState = normalizeRallyState(adminState.rallyBySet?.[rallyKey], pairA, pairB);
+            const undoCount = Array.isArray(adminState.rallyUndoBySet?.[rallyKey])
+                ? adminState.rallyUndoBySet[rallyKey].length
+                : 0;
+            const playerLabelBySlot = new Map([...sideAMeta, ...sideBMeta].map(([lbl, slot]) => [slot, lbl]));
+            const serverName = playerLabelBySlot.get(rallyState.serverSlot) || 'Người phát';
+            const receiverName = playerLabelBySlot.get(rallyState.receiverSlot) || 'Người đỡ';
+            const serverHasPartner = rallyState.serverSlot.startsWith('a') ? sideAMeta.length > 1 : sideBMeta.length > 1;
+            const nextFaultLabel = rallyState.serveTurn === 1 && serverHasPartner ? '→ Phát 2' : '→ Đổi giao';
+            const serverOrderArr = rallyState.serverSlot.startsWith('a') ? rallyState.orderA : rallyState.orderB;
+            const oppOrderArr = rallyState.serverSlot.startsWith('a') ? rallyState.orderB : rallyState.orderA;
+            const serverPosNum = Math.max(1, serverOrderArr.indexOf(rallyState.serverSlot) + 1);
+            const recvPosNum = Math.max(1, oppOrderArr.indexOf(rallyState.receiverSlot) + 1);
+            const serverCourtSide = serverPosNum === 1 ? 'Phải' : 'Trái';
+            const recvCourtSide = recvPosNum === 1 ? 'Phải' : 'Trái';
+
+            const rightBoardBadge = setWinner === 'B'
+                ? '<span class="set-auto-badge win">🏆 WIN</span>'
+                : (!setWinner
+                    ? ((Number(s.a) > 0 || Number(s.b) > 0)
+                        ? '<span class="set-auto-badge live">ĐANG ĐẤU</span>'
+                        : '<span class="set-auto-badge">CHỜ ĐẤU</span>')
+                    : '');
+
+            const sideAHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideAMeta, rowStats, teamA?.color || '#2563EB', `Cặp ${pairA?.pair_label || 'A'}`, rallyState, 'a');
+            const sideBHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideBMeta, rowStats, teamB?.color || '#E05328', `Cặp ${pairB?.pair_label || 'B'}`, rallyState, 'b');
+
             return `
-                <div class="set-editor-row" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">
-                    <div style="display:flex;align-items:center;gap:8px;min-width:130px;">
-                        ${winBadge}
-                    </div>
-
-                    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
-                        <div class="stepper-group">
-                            <span style="font-size:12px;font-weight:700;color:${escapeHtml(teamA?.color || '#2563EB')};">${escapeHtml(pairA?.pair_label || 'A')}</span>
-                            <button type="button" class="btn-step" data-action="step-score" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-side="a" data-delta="-1" aria-label="Giảm điểm A">−</button>
-                            <input type="number" min="0" max="99" class="score-num-input tabular" data-action="input-score" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-side="a" value="${Number(s.a) || 0}">
-                            <button type="button" class="btn-step plus" data-action="step-score" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-side="a" data-delta="1" aria-label="Tăng điểm A">+</button>
+                <div class="set-editor-block" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">
+                    <div class="set-editor-row" style="margin-top:0;border:none;padding:0;background:transparent;">
+                        <div style="display:flex;align-items:center;gap:8px;min-width:130px;">
+                            ${winBadge}
                         </div>
 
-                        <strong style="color:var(--muted);">:</strong>
+                        <div class="set-readonly-board" title="Tỉ số Set tự cập nhật khi bên Phát ghi điểm (hiển thị WIN ngay bên đội thắng Set)">
+                            ${setWinner === 'A' ? '<span class="set-auto-badge win">🏆 WIN</span>' : ''}
+                            <span class="set-team-tag" style="color:${escapeHtml(teamA?.color || '#2563EB')};">${escapeHtml(pairA?.pair_label || 'A')}</span>
+                            <span class="set-score-pill tabular">${Number(s.a) || 0}</span>
+                            <span class="set-score-sep">:</span>
+                            <span class="set-score-pill tabular">${Number(s.b) || 0}</span>
+                            <span class="set-team-tag" style="color:${escapeHtml(teamB?.color || '#7C3AED')};">${escapeHtml(pairB?.pair_label || 'B')}</span>
+                            ${rightBoardBadge}
+                        </div>
 
-                        <div class="stepper-group">
-                            <button type="button" class="btn-step" data-action="step-score" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-side="b" data-delta="-1" aria-label="Giảm điểm B">−</button>
-                            <input type="number" min="0" max="99" class="score-num-input tabular" data-action="input-score" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-side="b" value="${Number(s.b) || 0}">
-                            <button type="button" class="btn-step plus" data-action="step-score" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-side="b" data-delta="1" aria-label="Tăng điểm B">+</button>
-                            <span style="font-size:12px;font-weight:700;color:${escapeHtml(teamB?.color || '#7C3AED')};">${escapeHtml(pairB?.pair_label || 'B')}</span>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <button type="button" class="btn btn-secondary btn-sm" data-action="reset-set-stats" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" title="Đặt lại điểm Set và thống kê cá nhân Set này về 0">⟲ Đặt lại Set</button>
+                            ${sets.length > 1
+                    ? `<button type="button" class="btn btn-danger btn-sm" data-action="remove-set" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">Xóa Set</button>`
+                    : ''
+                }
                         </div>
                     </div>
 
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <button type="button" class="btn btn-secondary btn-sm" data-action="swap-set-score" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" title="Đổi điểm A ↔ B">⇄ Đảo</button>
-                        ${sets.length > 1
-                            ? `<button type="button" class="btn btn-danger btn-sm" data-action="remove-set" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">Xóa Set</button>`
-                            : ''
-                        }
+                    <div class="set-player-box">
+                        <div class="set-player-head">
+                            <span>Thống kê cá nhân Set ${setIdx + 1}</span>
+                            <span class="section-sub">
+                                Điểm Set chỉ + khi bên Phát ghi điểm · Cá nhân: <strong>${escapeHtml(pairA?.pair_label || 'A')} ${sumPtsA}đ</strong> (Out ${sumErrA}) · <strong>${escapeHtml(pairB?.pair_label || 'B')} ${sumPtsB}đ</strong> (Out ${sumErrB})
+                            </span>
+                        </div>
+                        <div class="rally-control-bar">
+                            <div class="rally-status-wrap">
+                                <div class="serve-turn-pills" role="group" aria-label="Lượt phát bóng">
+                                    <span class="serve-turn-lbl">Lượt phát:</span>
+                                    <button type="button" class="serve-turn-btn ${rallyState.serveTurn === 1 ? 'active' : ''}" data-action="set-serve-turn" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-turn="1">Phát 1</button>
+                                    <button type="button" class="serve-turn-btn ${rallyState.serveTurn === 2 ? 'active' : ''}" data-action="set-serve-turn" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-turn="2" ${!serverHasPartner ? 'disabled' : ''}>Phát 2</button>
+                                </div>
+                                <span class="rally-matchup-pill">
+                                    🎾 <strong>${escapeHtml(serverName)}</strong> <span class="rally-turn-chip">#${serverPosNum} · ${serverCourtSide} · Phát ${rallyState.serveTurn}</span>
+                                    <span class="rally-arrow">➔</span>
+                                    🛡 <strong>${escapeHtml(receiverName)}</strong> <span class="rally-recv-chip">#${recvPosNum} · ${recvCourtSide} Đỡ</span>
+                                </span>
+                            </div>
+                            <div class="rally-actions-wrap">
+                                <button type="button" class="btn-rally btn-rally-point" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="server-ace" title="${escapeHtml(serverName)} tấn công chính xác: +1đ, +1 Điểm Set, giữ Phát ${rallyState.serveTurn}, đổi sân Phải↔Trái &amp; đổi người đỡ chéo sân">${escapeHtml(serverName)} tấn công chính xác</button>
+                                <button type="button" class="btn-rally btn-rally-recv-err" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="receiver-error" title="${escapeHtml(receiverName)} đỡ hỏng: +1đ ${escapeHtml(serverName)}, +1 Out ${escapeHtml(receiverName)}, +1 Điểm Set, đổi sân Phải↔Trái &amp; đổi người đỡ chéo sân">${escapeHtml(receiverName)} đỡ hỏng</button>
+                                <button type="button" class="btn-rally btn-rally-serve-err" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="server-out" title="${escapeHtml(serverName)} phát hỏng/Out: +1 Out/Lưới &amp; chuyển lượt (${nextFaultLabel}), không cộng điểm Set cho 2 bên">${escapeHtml(serverName)} phát hỏng</button>
+                                <button type="button" class="btn-rally btn-rally-recv-win" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="receiver-win" title="${escapeHtml(receiverName)} phòng thủ thành công: +1đ cá nhân cho ${escapeHtml(receiverName)}, không cộng điểm Set &amp; chuyển lượt (${nextFaultLabel})">${escapeHtml(receiverName)} phòng thủ thành công</button>
+                                <button type="button" class="btn-rally btn-rally-undo" data-action="undo-rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" ${undoCount === 0 ? 'disabled' : ''} title="Hoàn tác pha bóng vừa bấm gần nhất trong Set này">↩ Hoàn tác${undoCount > 0 ? ` (${undoCount})` : ''}</button>
+                            </div>
+                        </div>
+                        <div class="set-player-cols">
+                            ${sideAHtml}
+                            ${sideBHtml}
+                        </div>
                     </div>
                 </div>
             `;
         }).join('');
+
+        const ovCourt = String(sm.format_override?.court || '').trim();
+        const ovTime = String(sm.format_override?.scheduledTime || '').trim();
+        const tmSchedForPlaceholder = parseScheduleValue(match.scheduled_time);
 
         return `
             <div class="scorer-sub-card">
@@ -176,7 +308,7 @@ function renderScoreOperatorSubtab(state, adminState) {
                     </div>
                     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                         <span class="tag ${ev.winner ? 'tag-status-completed' : 'tag-round'}">
-                            Chung cuộc: ${ev.setsWonA} - ${ev.setsWonB}
+                            Final: ${ev.setsWonA} - ${ev.setsWonB}
                             ${ev.winner ? ` (${ev.winner === 'A' ? escapeHtml(pairA?.pair_label || 'A') : escapeHtml(pairB?.pair_label || 'B')} thắng)` : ''}
                         </span>
                         <div class="quick-chip-row">
@@ -200,11 +332,24 @@ function renderScoreOperatorSubtab(state, adminState) {
                     </div>
                 </div>
 
+                <div class="sub-schedule-strip">
+                    
+                    <div class="sub-sched-grid">
+                        <div>
+                            <label class="form-label" style="font-size:11px;margin-bottom:4px;">Sân riêng</label>
+                            <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="court" value="${escapeHtml(ovCourt)}" placeholder="Theo trận (${escapeHtml(match.court || 'Sân 1')})">
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px;margin-bottom:4px;">Giờ riêng</label>
+                            <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="scheduledTime" value="${escapeHtml(ovTime)}" placeholder="${escapeHtml(tmSchedForPlaceholder.time || '08:30')}">
+                        </div>
+                    </div>
+                </div>
+
                 ${setsRowsHtml}
 
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
                     <button type="button" class="btn btn-secondary btn-sm" data-action="add-set" data-sub-id="${escapeHtml(sm.id)}">+ Thêm Set</button>
-                    <span class="section-sub">Chưa đấu: ẩn trên Live · Sắp đấu: hiện mờ chuẩn bị · Đang đấu: hiện nổi bật</span>
                 </div>
             </div>
         `;
@@ -248,15 +393,19 @@ function renderScoreOperatorSubtab(state, adminState) {
                         </select>
                     </div>
                     <div>
-                        <label class="form-label">Sân thi đấu</label>
+                        <label class="form-label">Sân mặc định (cả trận)</label>
                         <input name="court" class="form-input" value="${escapeHtml(match.court)}" placeholder="Sân 1">
                         <div class="quick-chip-row" style="margin-top:6px;">
                             ${['Sân 1', 'Sân 2', 'Sân 3', 'Sân 4'].map((c) => `<button type="button" class="quick-chip ${match.court === c ? 'active' : ''}" data-action="quick-match-court" data-match-id="${escapeHtml(match.id)}" data-court="${c}">${c}</button>`).join('')}
                         </div>
                     </div>
                     <div>
+                        <label class="form-label">Ngày thi đấu</label>
+                        <input type="date" name="scheduled_date" class="form-input" value="${escapeHtml(parseScheduleValue(match.scheduled_time).date)}">
+                    </div>
+                    <div>
                         <label class="form-label">Giờ thi đấu</label>
-                        <input name="scheduled_time" class="form-input" value="${escapeHtml(match.scheduled_time)}" placeholder="09:30">
+                        <input name="scheduled_time" class="form-input" value="${escapeHtml(parseScheduleValue(match.scheduled_time).time)}" placeholder="09:30">
                     </div>
                     <div>
                         <label class="form-label">Ghi chú</label>
@@ -266,8 +415,12 @@ function renderScoreOperatorSubtab(state, adminState) {
             </form>
 
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:10px 14px;background:var(--paper);border:1px solid var(--line);border-radius:14px;">
-                <span class="section-sub"><strong>Thứ tự các cặp đấu:</strong> dùng nút <strong>&uarr; / &darr;</strong> ở từng cặp hoặc chọn nhanh</span>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                    <span class="section-sub"><strong>Luật Side-Out &amp; Cá nhân:</strong> chọn <strong>🎾 Phát</strong> / <strong>🛡 Đỡ</strong> — chỉ <strong>bên Phát ghi điểm</strong> mới +1 Điểm Set; <strong>phát hỏng</strong> hoặc <strong>đỡ được</strong> không cộng điểm Set và tự chuyển lượt (1→2→Đổi giao).</span>
+                </div>
                 <div class="quick-chip-row">
+                    <button type="button" class="quick-chip" data-action="assign-multi-courts" data-match-id="${escapeHtml(match.id)}" title="Gán Level 1 -> Sân 1, Level 2 -> Sân 2, Level 3 -> Sân 3">&#9889; Chia ${totalSubs} sân (Sân 1&rarr;${totalSubs})</button>
+                    <button type="button" class="quick-chip" data-action="clear-sub-courts" data-match-id="${escapeHtml(match.id)}" title="Đưa tất cả cặp về cùng sân mặc định của trận">&#8634; Gom 1 sân chung</button>
                     <button type="button" class="quick-chip" data-action="sort-subs-by-status" data-match-id="${escapeHtml(match.id)}">&#8597; Ưu tiên Đang đấu &rarr; Sắp đấu</button>
                     <button type="button" class="quick-chip" data-action="reset-sub-order" data-match-id="${escapeHtml(match.id)}">&#8634; Theo Level 1&rarr;${totalSubs}</button>
                 </div>
@@ -382,6 +535,9 @@ function renderScheduleEditorSubtab(state) {
         const tA = teamsMap.get(tm.team_a_id);
         const tB = teamsMap.get(tm.team_b_id);
         const ev = evaluateTeamMatch(tm, state.subMatches, config);
+        const courtsList = getTeamMatchCourts(ev.subMatches, tm);
+        const courtSummary = courtsList.join(' · ');
+        const schedSummary = formatScheduleRaw(tm.scheduled_time);
         return `
             <div class="set-editor-row" style="margin-top:0;margin-bottom:8px;">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -389,7 +545,7 @@ function renderScheduleEditorSubtab(state) {
                     <strong>${escapeHtml(tA?.name || '?')}</strong>
                     <span style="color:var(--muted);">(${ev.subWinsA} - ${ev.subWinsB})</span>
                     <strong>${escapeHtml(tB?.name || '?')}</strong>
-                    <span class="section-sub">${escapeHtml(tm.court || '')} ${tm.scheduled_time ? `• ${escapeHtml(tm.scheduled_time)}` : ''}</span>
+                    <span class="section-sub">${escapeHtml(courtSummary)} ${schedSummary ? `• ${escapeHtml(schedSummary)}` : ''}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                     <button type="button" class="btn btn-secondary btn-sm" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Nhập điểm</button>
@@ -442,10 +598,14 @@ function renderScheduleEditorSubtab(state) {
                             <select name="team_b_id" class="form-select" required>${teamOptions}</select>
                         </div>
                     </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));gap:10px;">
                         <div class="form-group">
                             <label class="form-label">Sân</label>
                             <input name="court" class="form-input" value="Sân Trung Tâm">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Ngày thi đấu</label>
+                            <input type="date" name="scheduled_date" class="form-input">
                         </div>
                         <div class="form-group">
                             <label class="form-label">Giờ</label>

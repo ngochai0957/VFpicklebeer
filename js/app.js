@@ -1,20 +1,27 @@
 import { createInitialDemoState } from './demo-data.js';
 import { createStore } from './store.js';
 import {
+    applyRallyOutcomeToSet,
     buildResizedRoster,
     calculateStandings,
+    combineScheduleValue,
     escapeHtml,
     evaluateSubMatch,
     evaluateTeamMatch,
     generateRoundRobinSchedule,
     getSubMatchStatusRank,
-    normalizeConfig
+    normalizeConfig,
+    normalizeRallyState,
+    normalizeSetPlayerStats,
+    selectRallyRole,
+    swapRallyCourtOrder
 } from './tournament-engine.js';
 import {
     renderAdminLoginModal,
     renderAdminTab
 } from './ui-admin.js';
 import {
+    renderAwardsTab,
     renderLiveSpotlight,
     renderMatchesTab,
     renderRulesTab,
@@ -33,16 +40,21 @@ const appState = {
     activeTab: 'standings',
     tvMode: false,
     teamsQuery: '',
+    awardsFilters: {
+        teamId: 'all',
+        query: ''
+    },
     filters: {
         status: 'all',
         round: 'all',
         teamId: 'all',
-        view: 'list',
         query: ''
     },
     adminState: {
         subtab: 'scores',
-        selectedMatchId: null
+        selectedMatchId: null,
+        rallyBySet: {},
+        rallyUndoBySet: {}
     },
     modal: null,
     loading: true,
@@ -134,7 +146,18 @@ const ICONS = {
 };
 
 function formatTwoToneTitle(rawName) {
-    const safe = escapeHtml(rawName || 'Pickleball Team League');
+    const raw = String(rawName || 'Pickleball Team League').trim();
+    const legacyMatch = raw.match(/^vacif\s+picklebeer\s+team\s+league\s+(\d{4})$/i);
+    if (legacyMatch) {
+        return `VaciF PickleBeer ${escapeHtml(legacyMatch[1])} <span>Team League</span>`;
+    }
+    if (raw.includes('\n')) {
+        const [line1, ...rest] = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        if (rest.length > 0) {
+            return `${escapeHtml(line1)} <span>${escapeHtml(rest.join(' '))}</span>`;
+        }
+    }
+    const safe = escapeHtml(raw);
     const parts = safe.trim().split(/\s+/);
     if (parts.length <= 2) return safe;
     const splitAt = Math.max(1, parts.length - 2);
@@ -192,6 +215,9 @@ function renderHeroAndNav() {
                     </button>
                     <button type="button" class="nav-tab ${tab === 'teams' ? 'active' : ''}" data-action="switch-tab" data-tab="teams">
                         Đội Hình
+                    </button>
+                    <button type="button" class="nav-tab ${tab === 'awards' ? 'active' : ''}" data-action="switch-tab" data-tab="awards">
+                        Giải Phụ &amp; Point
                     </button>
                     <button type="button" class="nav-tab ${tab === 'rules' ? 'active' : ''}" data-action="switch-tab" data-tab="rules">
                         Thể Thức
@@ -346,6 +372,7 @@ function renderMainContent() {
     if (appState.activeTab === 'standings') tabHtml = renderStandingsTab(state, appState.isAdmin);
     else if (appState.activeTab === 'matches') tabHtml = renderMatchesTab(state, appState.filters, appState.isAdmin);
     else if (appState.activeTab === 'teams') tabHtml = renderTeamsTab(state, appState.teamsQuery);
+    else if (appState.activeTab === 'awards') tabHtml = renderAwardsTab(state, appState.awardsFilters);
     else if (appState.activeTab === 'rules') tabHtml = renderRulesTab(state);
 
     mainEl.innerHTML = `${liveBanner}${tabHtml}`;
@@ -517,22 +544,39 @@ async function persistSubMatchOrders(orderedSubs, toastMsg) {
     }
 }
 
-function mutateSubMatchScore(subId, setIdx, side, nextValue, rerenderAfter = true) {
+async function updateSubMatchOverrideFields(subId, fieldsPatch, toastMsg = '') {
     if (!appState.isAdmin || !appState.data) return;
     const sm = appState.data.subMatches.find((x) => x.id === subId);
     if (!sm) return;
 
-    const sets = Array.isArray(sm.sets) ? sm.sets.map((s) => ({ a: Number(s.a) || 0, b: Number(s.b) || 0 })) : [{ a: 0, b: 0 }];
-    if (!sets[setIdx]) return;
+    const nextOverride = (sm.format_override && typeof sm.format_override === 'object')
+        ? { ...sm.format_override }
+        : {};
+    for (const [key, rawVal] of Object.entries(fieldsPatch)) {
+        const cleaned = typeof rawVal === 'string' ? rawVal.trim() : rawVal;
+        if (!cleaned) delete nextOverride[key];
+        else nextOverride[key] = cleaned;
+    }
+    const cleanOverride = Object.keys(nextOverride).length > 0 ? nextOverride : null;
+    sm.format_override = cleanOverride;
 
-    const clamped = Math.max(0, Math.min(99, Number(nextValue) || 0));
-    sets[setIdx][side] = clamped;
-    sm.sets = sets;
+    try {
+        setSaveStatus('Đang lưu...');
+        appState.data = await store.updateSubMatch(subId, { format_override: cleanOverride });
+        setSaveStatus('Đã lưu ✓');
+        if (toastMsg) showToast(toastMsg);
+        renderAll();
+    } catch (err) {
+        setSaveStatus('Lỗi lưu!', true);
+        showToast(err.message, true);
+    }
+}
 
-    // Auto-update sub-match status cleanly when scores change
-    const config = normalizeConfig(appState.data.tournament?.config);
+function syncSubMatchLifecycle(sm) {
+    const sets = Array.isArray(sm.sets) ? sm.sets : [];
+    const config = normalizeConfig(appState.data?.tournament?.config);
     const ev = evaluateSubMatch({ ...sm, status: 'live' }, config);
-    const hasAnyScore = sets.some((s) => s.a > 0 || s.b > 0);
+    const hasAnyScore = sets.some((s) => (Number(s.a) || 0) > 0 || (Number(s.b) || 0) > 0);
     if (ev.winner) {
         sm.status = 'completed';
     } else if (hasAnyScore) {
@@ -542,19 +586,135 @@ function mutateSubMatchScore(subId, setIdx, side, nextValue, rerenderAfter = tru
     }
     clearSubMatchQueueState(sm);
 
-    // Auto-promote parent Team Match from upcoming -> live when scoring begins
     if (hasAnyScore) {
         const parentTm = (appState.data.teamMatches || []).find((m) => m.id === sm.team_match_id);
         if (parentTm && parentTm.status === 'upcoming') {
             parentTm.status = 'live';
-            store.updateTeamMatch(parentTm.id, { status: 'live' }).catch(() => {});
+            store.updateTeamMatch(parentTm.id, { status: 'live' }).catch(() => { });
         }
     }
+}
 
-    queueSubMatchSave(subId);
-    if (rerenderAfter) {
-        renderAll();
-    }
+function getSubMatchPairObjects(sm) {
+    const pairs = appState.data?.teamPairs || [];
+    return {
+        pairA: sm?.pair_a_id ? pairs.find((p) => p.id === sm.pair_a_id) || null : null,
+        pairB: sm?.pair_b_id ? pairs.find((p) => p.id === sm.pair_b_id) || null : null
+    };
+}
+
+function getSetRallyState(subId, setIdx, pairA, pairB) {
+    const key = `${subId}:${setIdx}`;
+    return normalizeRallyState(appState.adminState.rallyBySet?.[key], pairA, pairB);
+}
+
+function setSetRallyState(subId, setIdx, nextRally) {
+    if (!appState.adminState.rallyBySet) appState.adminState.rallyBySet = {};
+    appState.adminState.rallyBySet[`${subId}:${setIdx}`] = nextRally;
+}
+
+function cloneStatRow(row) {
+    return {
+        a1: { points: Number(row?.a1?.points) || 0, errors: Number(row?.a1?.errors) || 0 },
+        a2: { points: Number(row?.a2?.points) || 0, errors: Number(row?.a2?.errors) || 0 },
+        b1: { points: Number(row?.b1?.points) || 0, errors: Number(row?.b1?.errors) || 0 },
+        b2: { points: Number(row?.b2?.points) || 0, errors: Number(row?.b2?.errors) || 0 }
+    };
+}
+
+function pushRallyUndoSnapshot(subId, setIdx, statsRow, setsRow, rallyState) {
+    if (!appState.adminState.rallyUndoBySet) appState.adminState.rallyUndoBySet = {};
+    const key = `${subId}:${setIdx}`;
+    const stack = Array.isArray(appState.adminState.rallyUndoBySet[key])
+        ? appState.adminState.rallyUndoBySet[key]
+        : [];
+    stack.push({
+        statRow: cloneStatRow(statsRow),
+        setScore: { a: Number(setsRow?.a) || 0, b: Number(setsRow?.b) || 0 },
+        rally: { ...rallyState }
+    });
+    if (stack.length > 50) stack.shift();
+    appState.adminState.rallyUndoBySet[key] = stack;
+}
+
+function commitSetStatsAndScore(sm, setIdx, setStats, sets) {
+    const nextOverride = (sm.format_override && typeof sm.format_override === 'object')
+        ? { ...sm.format_override }
+        : {};
+    nextOverride.setPlayerStats = setStats;
+    sm.format_override = nextOverride;
+    sm.sets = sets;
+    syncSubMatchLifecycle(sm);
+    queueSubMatchSave(sm.id);
+    renderAll();
+}
+
+function applyRallyOutcome(subId, setIdx, outcome) {
+    if (!appState.isAdmin || !appState.data) return;
+    const sm = appState.data.subMatches.find((x) => x.id === subId);
+    if (!sm) return;
+
+    const sets = Array.isArray(sm.sets) ? sm.sets.map((s) => ({ a: Number(s.a) || 0, b: Number(s.b) || 0 })) : [{ a: 0, b: 0 }];
+    if (!sets[setIdx]) return;
+
+    const { pairA, pairB } = getSubMatchPairObjects(sm);
+    const rally = getSetRallyState(subId, setIdx, pairA, pairB);
+    const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+    const result = applyRallyOutcomeToSet(setStats[setIdx], sets[setIdx], rally, outcome, pairA, pairB);
+    if (!result) return;
+
+    pushRallyUndoSnapshot(subId, setIdx, setStats[setIdx], sets[setIdx], rally);
+    setStats[setIdx] = result.statRow;
+    sets[setIdx] = result.setScore;
+    setSetRallyState(subId, setIdx, result.rally);
+    commitSetStatsAndScore(sm, setIdx, setStats, sets);
+}
+
+function resetSetStats(subId, setIdx) {
+    if (!appState.isAdmin || !appState.data) return;
+    const sm = appState.data.subMatches.find((x) => x.id === subId);
+    if (!sm) return;
+
+    const sets = Array.isArray(sm.sets) ? sm.sets.map((s) => ({ a: Number(s.a) || 0, b: Number(s.b) || 0 })) : [{ a: 0, b: 0 }];
+    if (!sets[setIdx]) return;
+
+    const { pairA, pairB } = getSubMatchPairObjects(sm);
+    const rally = getSetRallyState(subId, setIdx, pairA, pairB);
+    const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+
+    pushRallyUndoSnapshot(subId, setIdx, setStats[setIdx], sets[setIdx], rally);
+
+    setStats[setIdx] = {
+        a1: { points: 0, errors: 0 },
+        a2: { points: 0, errors: 0 },
+        b1: { points: 0, errors: 0 },
+        b2: { points: 0, errors: 0 }
+    };
+    sets[setIdx] = { a: 0, b: 0 };
+    setSetRallyState(subId, setIdx, normalizeRallyState(null, pairA, pairB));
+    commitSetStatsAndScore(sm, setIdx, setStats, sets);
+}
+
+function undoLastRallyOutcome(subId, setIdx) {
+    if (!appState.isAdmin || !appState.data) return;
+    const sm = appState.data.subMatches.find((x) => x.id === subId);
+    if (!sm) return;
+
+    const key = `${subId}:${setIdx}`;
+    const stack = appState.adminState.rallyUndoBySet?.[key];
+    if (!Array.isArray(stack) || stack.length === 0) return;
+
+    const sets = Array.isArray(sm.sets) ? sm.sets.map((s) => ({ a: Number(s.a) || 0, b: Number(s.b) || 0 })) : [{ a: 0, b: 0 }];
+    if (!sets[setIdx]) return;
+
+    const snap = stack.pop();
+    const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+    setStats[setIdx] = cloneStatRow(snap.statRow);
+    sets[setIdx] = { a: Number(snap.setScore.a) || 0, b: Number(snap.setScore.b) || 0 };
+
+    const { pairA, pairB } = getSubMatchPairObjects(sm);
+    setSetRallyState(subId, setIdx, normalizeRallyState(snap.rally, pairA, pairB));
+    commitSetStatsAndScore(sm, setIdx, setStats, sets);
 }
 
 async function handleAction(action, el, event) {
@@ -635,12 +795,6 @@ async function handleAction(action, el, event) {
         return;
     }
 
-    if (action === 'matches-view') {
-        appState.filters.view = el.dataset.view || 'list';
-        renderMainContent();
-        return;
-    }
-
     if (action === 'filter-status') {
         appState.filters.status = el.dataset.value || 'all';
         renderMainContent();
@@ -649,7 +803,6 @@ async function handleAction(action, el, event) {
 
     if (action === 'filter-round-btn') {
         appState.filters.round = el.dataset.round || 'all';
-        appState.filters.view = 'list';
         appState.activeTab = 'matches';
         renderAll();
         return;
@@ -767,30 +920,105 @@ async function handleAction(action, el, event) {
         return;
     }
 
-    if (action === 'swap-set-score') {
+    if (action === 'quick-sub-court') {
         if (!appState.isAdmin) return;
+        const nextCourt = String(el.dataset.court || '').trim();
+        await updateSubMatchOverrideFields(
+            el.dataset.subId,
+            { court: nextCourt },
+            nextCourt ? `Đã gán cặp sang ${nextCourt}.` : 'Đã đưa cặp về dùng sân chung của trận.'
+        );
+        return;
+    }
+
+    if (action === 'assign-multi-courts' || action === 'clear-sub-courts') {
+        if (!appState.isAdmin || !appState.data) return;
+        const tm = appState.data.teamMatches.find((m) => m.id === el.dataset.matchId);
+        if (!tm) return;
+        const config = normalizeConfig(appState.data.tournament?.config);
+        const evalTm = evaluateTeamMatch(tm, appState.data.subMatches, config);
+        const assignSplit = action === 'assign-multi-courts';
+        try {
+            setSaveStatus('Đang lưu...');
+            for (let i = 0; i < evalTm.subMatches.length; i++) {
+                const sm = evalTm.subMatches[i];
+                const nextOverride = (sm.format_override && typeof sm.format_override === 'object')
+                    ? { ...sm.format_override }
+                    : {};
+                if (assignSplit) {
+                    nextOverride.court = `Sân ${i + 1}`;
+                } else {
+                    delete nextOverride.court;
+                }
+                const cleanOverride = Object.keys(nextOverride).length > 0 ? nextOverride : null;
+                sm.format_override = cleanOverride;
+                appState.data = await store.updateSubMatch(sm.id, { format_override: cleanOverride });
+            }
+            setSaveStatus('Đã lưu ✓');
+            showToast(assignSplit ? 'Đã chia mỗi cặp đấu 1 sân riêng!' : 'Đã đưa các cặp về dùng chung sân của trận.');
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi lưu!', true);
+            showToast(err.message, true);
+        }
+        return;
+    }
+
+    if (action === 'select-rally-role') {
+        if (!appState.isAdmin || !appState.data) return;
         const subId = el.dataset.subId;
         const setIdx = Number(el.dataset.setIdx);
-        const sm = appState.data?.subMatches.find((x) => x.id === subId);
-        if (!sm || !sm.sets?.[setIdx]) return;
-        const tempA = Number(sm.sets[setIdx].a) || 0;
-        sm.sets[setIdx].a = Number(sm.sets[setIdx].b) || 0;
-        sm.sets[setIdx].b = tempA;
-        queueSubMatchSave(subId);
+        const sm = appState.data.subMatches.find((x) => x.id === subId);
+        if (!sm) return;
+        const { pairA, pairB } = getSubMatchPairObjects(sm);
+        const cur = getSetRallyState(subId, setIdx, pairA, pairB);
+        setSetRallyState(subId, setIdx, selectRallyRole(cur, el.dataset.role, el.dataset.slot, pairA, pairB));
         renderAll();
         return;
     }
 
-    if (action === 'step-score') {
-        if (!appState.isAdmin) return;
+    if (action === 'swap-court-order') {
+        if (!appState.isAdmin || !appState.data) return;
         const subId = el.dataset.subId;
         const setIdx = Number(el.dataset.setIdx);
         const side = el.dataset.side;
-        const delta = Number(el.dataset.delta);
-        const sm = appState.data?.subMatches.find((x) => x.id === subId);
-        if (!sm || !sm.sets?.[setIdx]) return;
-        const current = Number(sm.sets[setIdx][side]) || 0;
-        mutateSubMatchScore(subId, setIdx, side, current + delta, true);
+        const sm = appState.data.subMatches.find((x) => x.id === subId);
+        if (!sm) return;
+        const { pairA, pairB } = getSubMatchPairObjects(sm);
+        const cur = getSetRallyState(subId, setIdx, pairA, pairB);
+        setSetRallyState(subId, setIdx, swapRallyCourtOrder(cur, side, pairA, pairB));
+        renderAll();
+        return;
+    }
+
+    if (action === 'set-serve-turn') {
+        if (!appState.isAdmin || !appState.data) return;
+        const subId = el.dataset.subId;
+        const setIdx = Number(el.dataset.setIdx);
+        const sm = appState.data.subMatches.find((x) => x.id === subId);
+        if (!sm) return;
+        const { pairA, pairB } = getSubMatchPairObjects(sm);
+        const cur = getSetRallyState(subId, setIdx, pairA, pairB);
+        setSetRallyState(subId, setIdx, normalizeRallyState({ ...cur, serveTurn: Number(el.dataset.turn) }, pairA, pairB));
+        renderAll();
+        return;
+    }
+
+    if (action === 'rally-outcome') {
+        if (!appState.isAdmin) return;
+        applyRallyOutcome(el.dataset.subId, Number(el.dataset.setIdx), el.dataset.outcome);
+        return;
+    }
+
+    if (action === 'undo-rally-outcome') {
+        if (!appState.isAdmin) return;
+        undoLastRallyOutcome(el.dataset.subId, Number(el.dataset.setIdx));
+        return;
+    }
+
+    if (action === 'reset-set-stats') {
+        if (!appState.isAdmin) return;
+        resetSetStats(el.dataset.subId, Number(el.dataset.setIdx));
         return;
     }
 
@@ -813,6 +1041,16 @@ async function handleAction(action, el, event) {
         const sm = appState.data?.subMatches.find((x) => x.id === subId);
         if (!sm || !Array.isArray(sm.sets) || sm.sets.length <= 1) return;
         sm.sets = sm.sets.filter((_, idx) => idx !== setIdx);
+        if (Array.isArray(sm.format_override?.setPlayerStats)) {
+            sm.format_override.setPlayerStats = sm.format_override.setPlayerStats.filter((_, idx) => idx !== setIdx);
+        }
+        for (const bag of [appState.adminState.rallyBySet, appState.adminState.rallyUndoBySet]) {
+            if (!bag) continue;
+            for (const key of Object.keys(bag)) {
+                if (key.startsWith(`${subId}:`)) delete bag[key];
+            }
+        }
+        syncSubMatchLifecycle(sm);
         queueSubMatchSave(subId);
         renderAll();
         return;
@@ -927,12 +1165,6 @@ document.addEventListener('change', async (event) => {
         return;
     }
 
-    if (action === 'input-score') {
-        if (!appState.isAdmin) return;
-        mutateSubMatchScore(target.dataset.subId, Number(target.dataset.setIdx), target.dataset.side, target.value, true);
-        return;
-    }
-
     if (action === 'sub-status') {
         if (!appState.isAdmin) return;
         await applySubMatchQueueStatus(target.dataset.subId, target.value);
@@ -965,22 +1197,34 @@ document.addEventListener('change', async (event) => {
             setSaveStatus('Lỗi lưu!', true);
             showToast(err.message, true);
         }
+        return;
+    }
+
+    if (action === 'sub-override-field') {
+        if (!appState.isAdmin) return;
+        const field = target.dataset.field;
+        if (!['court', 'scheduledTime'].includes(field)) return;
+        await updateSubMatchOverrideFields(target.dataset.subId, { [field]: target.value });
+        return;
+    }
+
+    if (action === 'awards-filter-team') {
+        appState.awardsFilters.teamId = target.value;
+        renderMainContent();
+        return;
     }
 });
 
 document.addEventListener('input', (event) => {
     const target = event.target;
-    if (target.dataset?.action === 'input-score' && appState.isAdmin) {
-        mutateSubMatchScore(target.dataset.subId, Number(target.dataset.setIdx), target.dataset.side, target.value, false);
-        return;
-    }
-
-    if (target.dataset?.action === 'filter-query') {
+    if (target.dataset?.action === 'filter-query' || target.dataset?.action === 'awards-filter-query') {
         const inputId = target.id;
         const selStart = target.selectionStart;
         const selEnd = target.selectionEnd;
 
-        if (inputId === 'teams-search-input') {
+        if (target.dataset.action === 'awards-filter-query') {
+            appState.awardsFilters.query = target.value;
+        } else if (inputId === 'teams-search-input') {
             appState.teamsQuery = target.value;
         } else {
             appState.filters.query = target.value;
@@ -1028,16 +1272,17 @@ document.addEventListener('submit', async (event) => {
     if (form.id === 'admin-match-meta-form') {
         const matchId = form.dataset.matchId;
         const fd = new FormData(form);
+        const combinedSched = combineScheduleValue(fd.get('scheduled_date'), fd.get('scheduled_time'));
         try {
             setSaveStatus('Đang lưu...');
             appState.data = await store.updateTeamMatch(matchId, {
                 status: String(fd.get('status') || 'upcoming'),
                 court: String(fd.get('court') || '').trim(),
-                scheduled_time: String(fd.get('scheduled_time') || '').trim(),
+                scheduled_time: combinedSched,
                 note: String(fd.get('note') || '').trim()
             });
             setSaveStatus('Đã lưu ✓');
-            showToast('Đã cập nhật trạng thái & thông tin sân!');
+            showToast('Đã cập nhật trạng thái, ngày giờ & sân!');
             renderAll();
         } catch (err) {
             setSaveStatus('Lỗi lưu!', true);
@@ -1162,7 +1407,7 @@ document.addEventListener('submit', async (event) => {
                 team_a_id: teamAId,
                 team_b_id: teamBId,
                 court: String(fd.get('court') || '').trim(),
-                scheduled_time: String(fd.get('scheduled_time') || '').trim(),
+                scheduled_time: combineScheduleValue(fd.get('scheduled_date'), fd.get('scheduled_time')),
                 status: 'upcoming',
                 sort_order: sortOrder,
                 note: ''

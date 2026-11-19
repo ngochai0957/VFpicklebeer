@@ -7,7 +7,7 @@ import { DEFAULT_CONFIG } from './tournament-engine.js';
 export function createInitialDemoState(tournamentId = 'main') {
     const tournament = {
         id: tournamentId,
-        name: 'VACIF PickleBeer Team League 2026',
+        name: 'VaciF PickleBeer 2026 Team League',
         subtitle: 'Giải đồng đội VACIF • Đội hình cố định (Fixed Lineup) • Tỉ số từng Set',
         status: 'live',
         config: {
@@ -146,7 +146,12 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 11, b: 7 }, { a: 11, b: 8 }],
             status: 'completed',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 7, errors: 4 }, a2: { points: 4, errors: 3 }, b1: { points: 4, errors: 6 }, b2: { points: 3, errors: 5 } },
+                    { a1: { points: 7, errors: 4 }, a2: { points: 4, errors: 4 }, b1: { points: 5, errors: 6 }, b2: { points: 3, errors: 5 } }
+                ]
+            }
         },
         {
             id: 'sm_r1_ab_2',
@@ -157,7 +162,13 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 8, b: 11 }, { a: 11, b: 9 }, { a: 7, b: 11 }],
             status: 'completed',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 5, errors: 6 }, a2: { points: 3, errors: 5 }, b1: { points: 7, errors: 4 }, b2: { points: 4, errors: 4 } },
+                    { a1: { points: 6, errors: 5 }, a2: { points: 5, errors: 4 }, b1: { points: 5, errors: 6 }, b2: { points: 4, errors: 5 } },
+                    { a1: { points: 4, errors: 6 }, a2: { points: 3, errors: 5 }, b1: { points: 6, errors: 4 }, b2: { points: 5, errors: 3 } }
+                ]
+            }
         },
         {
             id: 'sm_r1_ab_3',
@@ -168,7 +179,12 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 11, b: 9 }, { a: 11, b: 6 }],
             status: 'completed',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 6, errors: 5 }, a2: { points: 5, errors: 4 }, b1: { points: 5, errors: 6 }, b2: { points: 4, errors: 5 } },
+                    { a1: { points: 7, errors: 3 }, a2: { points: 4, errors: 3 }, b1: { points: 4, errors: 6 }, b2: { points: 2, errors: 5 } }
+                ]
+            }
         },
 
         // Vòng 1: C vs D (Team C thắng 2 - 1)
@@ -181,7 +197,13 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 11, b: 5 }, { a: 9, b: 11 }, { a: 11, b: 8 }],
             status: 'completed',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 7, errors: 3 }, a2: { points: 4, errors: 2 }, b1: { points: 3, errors: 6 }, b2: { points: 2, errors: 5 } },
+                    { a1: { points: 5, errors: 6 }, a2: { points: 4, errors: 5 }, b1: { points: 6, errors: 5 }, b2: { points: 5, errors: 4 } },
+                    { a1: { points: 6, errors: 4 }, a2: { points: 5, errors: 4 }, b1: { points: 5, errors: 6 }, b2: { points: 3, errors: 5 } }
+                ]
+            }
         },
         {
             id: 'sm_r1_cd_2',
@@ -192,7 +214,12 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 11, b: 9 }, { a: 12, b: 10 }],
             status: 'completed',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 6, errors: 5 }, a2: { points: 5, errors: 4 }, b1: { points: 6, errors: 6 }, b2: { points: 3, errors: 5 } },
+                    { a1: { points: 7, errors: 5 }, a2: { points: 5, errors: 5 }, b1: { points: 6, errors: 6 }, b2: { points: 4, errors: 6 } }
+                ]
+            }
         },
         {
             id: 'sm_r1_cd_3',
@@ -203,7 +230,12 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 6, b: 11 }, { a: 9, b: 11 }],
             status: 'completed',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 4, errors: 6 }, a2: { points: 2, errors: 5 }, b1: { points: 7, errors: 3 }, b2: { points: 4, errors: 3 } },
+                    { a1: { points: 5, errors: 6 }, a2: { points: 4, errors: 5 }, b1: { points: 6, errors: 5 }, b2: { points: 5, errors: 4 } }
+                ]
+            }
         },
 
         // Vòng 2: A vs C (LIVE)
@@ -216,7 +248,12 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 11, b: 8 }, { a: 11, b: 9 }],
             status: 'completed',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 6, errors: 4 }, a2: { points: 5, errors: 4 }, b1: { points: 5, errors: 6 }, b2: { points: 3, errors: 5 } },
+                    { a1: { points: 7, errors: 5 }, a2: { points: 4, errors: 4 }, b1: { points: 5, errors: 6 }, b2: { points: 4, errors: 5 } }
+                ]
+            }
         },
         {
             id: 'sm_r2_ac_2',
@@ -227,7 +264,13 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 9, b: 11 }, { a: 11, b: 7 }, { a: 8, b: 6 }],
             status: 'live',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 4, errors: 6 }, a2: { points: 5, errors: 5 }, b1: { points: 7, errors: 5 }, b2: { points: 4, errors: 4 } },
+                    { a1: { points: 6, errors: 4 }, a2: { points: 5, errors: 3 }, b1: { points: 4, errors: 6 }, b2: { points: 3, errors: 5 } },
+                    { a1: { points: 4, errors: 3 }, a2: { points: 4, errors: 3 }, b1: { points: 4, errors: 4 }, b2: { points: 2, errors: 4 } }
+                ]
+            }
         },
         {
             id: 'sm_r2_ac_3',
@@ -251,7 +294,13 @@ export function createInitialDemoState(tournamentId = 'main') {
             sets: [{ a: 11, b: 6 }, { a: 10, b: 12 }, { a: 7, b: 5 }],
             status: 'live',
             winner_override: null,
-            format_override: null
+            format_override: {
+                setPlayerStats: [
+                    { a1: { points: 7, errors: 3 }, a2: { points: 4, errors: 3 }, b1: { points: 4, errors: 6 }, b2: { points: 2, errors: 5 } },
+                    { a1: { points: 6, errors: 6 }, a2: { points: 4, errors: 6 }, b1: { points: 7, errors: 5 }, b2: { points: 5, errors: 5 } },
+                    { a1: { points: 4, errors: 3 }, a2: { points: 3, errors: 2 }, b1: { points: 3, errors: 4 }, b2: { points: 2, errors: 3 } }
+                ]
+            }
         },
         {
             id: 'sm_r2_bd_2',

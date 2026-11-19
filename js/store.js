@@ -66,8 +66,8 @@ class LocalStore {
             const raw = localStorage.getItem(this.storageKey);
             if (!raw) return createInitialDemoState(this.tournamentId);
             const normalized = normalizeState(JSON.parse(raw), this.tournamentId);
-            if (normalized.tournament.name === 'Giải Pickleball Team League 2026') {
-                normalized.tournament.name = 'VACIF PickleBeer Team League 2026';
+            if (normalized.tournament.name === 'Giải Pickleball Team League 2026' || normalized.tournament.name === 'VACIF PickleBeer Team League 2026') {
+                normalized.tournament.name = 'VaciF PickleBeer 2026 Team League';
                 normalized.tournament.subtitle = 'Giải đồng đội VACIF • Đội hình cố định (Fixed Lineup) • Tỉ số từng Set';
             }
             return normalized;
@@ -382,7 +382,7 @@ class SupabaseStore {
                 isUninitialized: true,
                 tournament: {
                     id: this.tournamentId,
-                    name: 'VACIF PickleBeer Team League 2026',
+                    name: 'VaciF PickleBeer 2026 Team League',
                     subtitle: 'Giải đồng đội VACIF • Chưa khởi tạo dữ liệu giải đấu',
                     status: 'upcoming',
                     config: normalizeConfig(null),
@@ -703,8 +703,10 @@ export function createStore() {
     const url = (APP_CONFIG.SUPABASE_URL || '').trim();
     const anonKey = (APP_CONFIG.SUPABASE_ANON_KEY || '').trim();
     const tournamentId = (APP_CONFIG.TOURNAMENT_ID || 'main').trim();
+    const forceLocalDemo = typeof window !== 'undefined'
+        && ['1', 'true', 'local'].includes((new URLSearchParams(window.location.search).get('demo') || '').toLowerCase());
 
-    if (url && anonKey) {
+    if (!forceLocalDemo && url && anonKey) {
         return new SupabaseStore(url, anonKey, tournamentId);
     }
     return new LocalStore(tournamentId);

@@ -400,23 +400,140 @@ export function calculateStandings(teams, teamMatches, subMatches, tournamentCon
     });
 }
 
+export function parseScheduleValue(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return { date: '', time: '' };
+
+    // ISO YYYY-MM-DD with optional separator and time
+    const isoMatch = text.match(/^(\d{4}-\d{2}-\d{2})(?:\s*[·|•\-,\s]\s*(.+))?$/);
+    if (isoMatch) {
+        return { date: isoMatch[1], time: (isoMatch[2] || '').trim() };
+    }
+
+    // DD/MM/YYYY with optional separator and time
+    const vnMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s*[·|•\-,\s]\s*(.+))?$/);
+    if (vnMatch) {
+        const dd = vnMatch[1].padStart(2, '0');
+        const mm = vnMatch[2].padStart(2, '0');
+        return { date: `${vnMatch[3]}-${mm}-${dd}`, time: (vnMatch[4] || '').trim() };
+    }
+
+    return { date: '', time: text };
+}
+
+export function combineScheduleValue(dateStr, timeStr) {
+    const d = String(dateStr || '').trim();
+    const t = String(timeStr || '').trim();
+    if (d && t) return `${d} · ${t}`;
+    return d || t || '';
+}
+
+export function formatScheduleDisplay(dateStr, timeStr) {
+    const d = String(dateStr || '').trim();
+    const t = String(timeStr || '').trim();
+    let dateLabel = d;
+    const iso = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (iso) {
+        dateLabel = `${iso[3]}/${iso[2]}/${iso[1]}`;
+    }
+    if (dateLabel && t) return `${dateLabel} · ${t}`;
+    return dateLabel || t || '';
+}
+
+export function formatScheduleRaw(raw) {
+    const parsed = parseScheduleValue(raw);
+    return formatScheduleDisplay(parsed.date, parsed.time);
+}
+
+export function resolveSubMatchSchedule(subMatch, teamMatch) {
+    const tmSched = parseScheduleValue(teamMatch?.scheduled_time);
+    const ov = subMatch?.format_override || null;
+    const ovCourt = String(ov?.court || '').trim();
+    const ovDate = String(ov?.scheduledDate || '').trim();
+    const ovTime = String(ov?.scheduledTime || '').trim();
+
+    const parentCourt = String(teamMatch?.court || '').trim();
+    const court = ovCourt || parentCourt;
+    const date = ovDate || tmSched.date;
+    const time = ovTime || tmSched.time;
+
+    return {
+        court,
+        date,
+        time,
+        scheduleLabel: formatScheduleDisplay(date, time),
+        hasCustomCourt: Boolean(ovCourt && ovCourt !== parentCourt),
+        hasCustomTime: Boolean(ovTime),
+        hasCustomSchedule: Boolean(ovDate || ovTime)
+    };
+}
+
+export function getTeamMatchCourts(subMatches, teamMatch) {
+    const list = (subMatches || [])
+        .map((sm) => resolveSubMatchSchedule(sm, teamMatch).court)
+        .filter(Boolean);
+    if (list.length === 0 && teamMatch?.court) {
+        return [String(teamMatch.court).trim()].filter(Boolean);
+    }
+    return Array.from(new Set(list)).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+}
+
 /**
  * Groups matches by Court (PickleballBrackets Court Board style) showing Live, Next Up, and Completed counts.
+ * Automatically splits a Team Match across multiple courts when its pairs are assigned to different courts.
  */
 export function buildCourtBoard(teamMatches, subMatches, tournamentConfig) {
     const courtsMap = new Map();
     const sorted = [...(teamMatches || [])].sort((a, b) => (a.round_number ?? 1) - (b.round_number ?? 1) || (a.sort_order ?? 1) - (b.sort_order ?? 1));
+    const levelNames = normalizeConfig(tournamentConfig).levelNames;
+
+    const ensureBucket = (name) => {
+        if (!courtsMap.has(name)) {
+            courtsMap.set(name, { court: name, live: [], upcoming: [], completed: [] });
+        }
+        return courtsMap.get(name);
+    };
 
     for (const tm of sorted) {
-        const courtName = (tm.court || '').trim() || 'Chưa phân sân';
-        if (!courtsMap.has(courtName)) {
-            courtsMap.set(courtName, { court: courtName, live: [], upcoming: [], completed: [] });
-        }
         const ev = evaluateTeamMatch(tm, subMatches, tournamentConfig);
-        const bucket = courtsMap.get(courtName);
-        if (ev.effectiveStatus === 'live') bucket.live.push({ tm, eval: ev });
-        else if (ev.effectiveStatus === 'completed') bucket.completed.push({ tm, eval: ev });
-        else bucket.upcoming.push({ tm, eval: ev });
+        const resolvedList = ev.subMatches.map((sm) => ({
+            sm,
+            sched: resolveSubMatchSchedule(sm, tm)
+        }));
+        const distinctCourts = Array.from(new Set(resolvedList.map((x) => x.sched.court || 'Chưa phân sân')));
+        const hasSplitCourts = distinctCourts.length > 1 || resolvedList.some((x) => x.sched.hasCustomCourt);
+
+        if (hasSplitCourts && resolvedList.length > 0) {
+            for (const { sm, sched } of resolvedList) {
+                const courtName = sched.court || 'Chưa phân sân';
+                const bucket = ensureBucket(courtName);
+                const st = sm.eval.effectiveStatus;
+                const levelName = levelNames[sm.level_index - 1] || `Level ${sm.level_index}`;
+                const entry = {
+                    tm,
+                    eval: ev,
+                    isSubSlot: true,
+                    subMatch: sm,
+                    subLabel: levelName,
+                    scheduleLabel: sched.scheduleLabel
+                };
+                if (st === 'live') bucket.live.push(entry);
+                else if (st === 'completed') bucket.completed.push(entry);
+                else bucket.upcoming.push(entry);
+            }
+            continue;
+        }
+
+        const courtName = (tm.court || '').trim() || 'Chưa phân sân';
+        const bucket = ensureBucket(courtName);
+        const entry = {
+            tm,
+            eval: ev,
+            scheduleLabel: formatScheduleRaw(tm.scheduled_time)
+        };
+        if (ev.effectiveStatus === 'live') bucket.live.push(entry);
+        else if (ev.effectiveStatus === 'completed') bucket.completed.push(entry);
+        else bucket.upcoming.push(entry);
     }
 
     return Array.from(courtsMap.values()).sort((a, b) => {
@@ -480,6 +597,415 @@ export function calculatePairStats(teamPairs, teamMatches, subMatches, tournamen
     }
 
     return pairStats;
+}
+
+const EMPTY_STAT_SLOT = () => ({ points: 0, errors: 0 });
+
+function getSideSlotKeys(side, pair) {
+    const first = side === 'a' ? 'a1' : 'b1';
+    const second = side === 'a' ? 'a2' : 'b2';
+    return pair?.player_2 ? [first, second] : [first];
+}
+
+function normalizeSideOrder(rawOrder, defaultSlots) {
+    if (defaultSlots.length <= 1) return [...defaultSlots];
+    if (Array.isArray(rawOrder) && rawOrder.length === 2) {
+        const s0 = String(rawOrder[0] || '');
+        const s1 = String(rawOrder[1] || '');
+        if (s0 !== s1 && defaultSlots.includes(s0) && defaultSlots.includes(s1)) {
+            return [s0, s1];
+        }
+    }
+    return [...defaultSlots];
+}
+
+function pickPartnerSlot(slot, sideOrder) {
+    if (sideOrder.length <= 1) return sideOrder[0];
+    return slot === sideOrder[0] ? sideOrder[1] : sideOrder[0];
+}
+
+/**
+ * Normalizes a doubles rally state (server, receiver, serve turn 1/2, court position order 1/2).
+ * Position index 0 = Right/Even court (1 - Phải), index 1 = Left/Odd court (2 - Trái).
+ * Default initial matchup: orderA[0] (Phát 1) -> orderB[0] (Đỡ 1).
+ */
+export function normalizeRallyState(rawRally, pairA, pairB) {
+    const slotsA = getSideSlotKeys('a', pairA);
+    const slotsB = getSideSlotKeys('b', pairB);
+    const orderA = normalizeSideOrder(rawRally?.orderA, slotsA);
+    const orderB = normalizeSideOrder(rawRally?.orderB, slotsB);
+    const allSlots = new Set([...orderA, ...orderB]);
+
+    const rawServer = String(rawRally?.serverSlot || '');
+    const serverSlot = allSlots.has(rawServer) ? rawServer : orderA[0];
+    const serverSide = serverSlot.startsWith('a') ? 'a' : 'b';
+    const serverOrder = serverSide === 'a' ? orderA : orderB;
+    const oppOrder = serverSide === 'a' ? orderB : orderA;
+
+    const rawReceiver = String(rawRally?.receiverSlot || '');
+    const receiverSlot = oppOrder.includes(rawReceiver) ? rawReceiver : oppOrder[0];
+
+    const serveTurn = serverOrder.length > 1 && Number(rawRally?.serveTurn) === 2 ? 2 : 1;
+    return { serverSlot, receiverSlot, serveTurn, orderA, orderB };
+}
+
+/**
+ * Swaps Position 1 (Right/Even) <-> Position 2 (Left/Odd) for a pair inside a Set.
+ */
+export function swapRallyCourtOrder(rawRally, side, pairA, pairB) {
+    const cur = normalizeRallyState(rawRally, pairA, pairB);
+    const nextOrderA = side === 'a' && cur.orderA.length === 2
+        ? [cur.orderA[1], cur.orderA[0]]
+        : cur.orderA;
+    const nextOrderB = side === 'b' && cur.orderB.length === 2
+        ? [cur.orderB[1], cur.orderB[0]]
+        : cur.orderB;
+    return {
+        ...cur,
+        orderA: nextOrderA,
+        orderB: nextOrderB
+    };
+}
+
+/**
+ * Updates the active server or receiver role while keeping them on opposite sides.
+ */
+export function selectRallyRole(rawRally, role, slot, pairA, pairB) {
+    const cur = normalizeRallyState(rawRally, pairA, pairB);
+    const allValid = new Set([...cur.orderA, ...cur.orderB]);
+    if (!allValid.has(slot)) return cur;
+
+    if (role === 'server') {
+        const prevSide = cur.serverSlot.startsWith('a') ? 'a' : 'b';
+        const nextSide = slot.startsWith('a') ? 'a' : 'b';
+        const serverOrder = nextSide === 'a' ? cur.orderA : cur.orderB;
+        const oppOrder = nextSide === 'a' ? cur.orderB : cur.orderA;
+        const serverIdx = Math.max(0, serverOrder.indexOf(slot));
+        const nextReceiver = oppOrder[serverIdx] ?? oppOrder[0];
+        return normalizeRallyState({
+            ...cur,
+            serverSlot: slot,
+            receiverSlot: nextReceiver,
+            serveTurn: nextSide !== prevSide ? 1 : cur.serveTurn
+        }, pairA, pairB);
+    }
+
+    if (role === 'receiver') {
+        const recvSide = slot.startsWith('a') ? 'a' : 'b';
+        const recvOrder = recvSide === 'a' ? cur.orderA : cur.orderB;
+        const oppOrder = recvSide === 'a' ? cur.orderB : cur.orderA;
+        const sameTeamServer = cur.serverSlot.startsWith(recvSide);
+        const recvIdx = Math.max(0, recvOrder.indexOf(slot));
+        const nextServer = sameTeamServer ? (oppOrder[recvIdx] ?? oppOrder[0]) : cur.serverSlot;
+        return normalizeRallyState({
+            ...cur,
+            serverSlot: nextServer,
+            receiverSlot: slot,
+            serveTurn: sameTeamServer ? 1 : cur.serveTurn
+        }, pairA, pairB);
+    }
+
+    return cur;
+}
+
+/**
+ * Advances doubles service turn on a lost rally (Serve 1 -> partner Serve 2 -> Side-out).
+ */
+export function advanceRallyServeTurn(rawRally, pairA, pairB) {
+    const cur = normalizeRallyState(rawRally, pairA, pairB);
+    const serverSide = cur.serverSlot.startsWith('a') ? 'a' : 'b';
+    const serverOrder = serverSide === 'a' ? cur.orderA : cur.orderB;
+    const oppOrder = serverSide === 'a' ? cur.orderB : cur.orderA;
+
+    if (cur.serveTurn === 1 && serverOrder.length > 1) {
+        const nextServer = pickPartnerSlot(cur.serverSlot, serverOrder);
+        const nextIdx = Math.max(0, serverOrder.indexOf(nextServer));
+        return {
+            ...cur,
+            serverSlot: nextServer,
+            receiverSlot: oppOrder[nextIdx] ?? oppOrder[0],
+            serveTurn: 2
+        };
+    }
+
+    return {
+        ...cur,
+        serverSlot: oppOrder[0],
+        receiverSlot: serverOrder[0],
+        serveTurn: 1
+    };
+}
+
+/**
+ * Applies a single doubles rally outcome under Side-Out scoring rules:
+ * - 'server-ace' / 'receiver-error': +1 point to server, +1 Set score,
+ *   serving pair swaps Left/Right court order so server stays diagonally opposite receiver (1 <-> 2).
+ * - 'server-out': +1 error to server, 0 Set score, advance serve turn (1->2->side-out).
+ * - 'receiver-win': +1 point to receiver, 0 Set score, advance serve turn (1->2->side-out).
+ */
+export function applyRallyOutcomeToSet(rawStatsRow, rawScoreRow, rawRally, outcome, pairA, pairB) {
+    if (!['server-ace', 'receiver-error', 'server-out', 'receiver-win'].includes(outcome)) {
+        return null;
+    }
+
+    const rally = normalizeRallyState(rawRally, pairA, pairB);
+    const statRow = {
+        a1: { points: Math.max(0, Number(rawStatsRow?.a1?.points) || 0), errors: Math.max(0, Number(rawStatsRow?.a1?.errors) || 0) },
+        a2: { points: Math.max(0, Number(rawStatsRow?.a2?.points) || 0), errors: Math.max(0, Number(rawStatsRow?.a2?.errors) || 0) },
+        b1: { points: Math.max(0, Number(rawStatsRow?.b1?.points) || 0), errors: Math.max(0, Number(rawStatsRow?.b1?.errors) || 0) },
+        b2: { points: Math.max(0, Number(rawStatsRow?.b2?.points) || 0), errors: Math.max(0, Number(rawStatsRow?.b2?.errors) || 0) }
+    };
+    const setScore = {
+        a: Math.max(0, Math.min(99, Number(rawScoreRow?.a) || 0)),
+        b: Math.max(0, Math.min(99, Number(rawScoreRow?.b) || 0))
+    };
+    const serverSide = rally.serverSlot.startsWith('a') ? 'a' : 'b';
+    const serverOrder = serverSide === 'a' ? rally.orderA : rally.orderB;
+    const oppOrder = serverSide === 'a' ? rally.orderB : rally.orderA;
+    let nextRally = rally;
+
+    const rotateServerAndReceiverOnScore = () => {
+        const swappedServerOrder = serverOrder.length === 2 ? [serverOrder[1], serverOrder[0]] : [...serverOrder];
+        const newServerIdx = Math.max(0, swappedServerOrder.indexOf(rally.serverSlot));
+        const nextReceiver = oppOrder[newServerIdx] ?? oppOrder[0];
+        return {
+            ...rally,
+            orderA: serverSide === 'a' ? swappedServerOrder : rally.orderA,
+            orderB: serverSide === 'b' ? swappedServerOrder : rally.orderB,
+            receiverSlot: nextReceiver
+        };
+    };
+
+    if (outcome === 'server-ace') {
+        statRow[rally.serverSlot].points = Math.min(99, statRow[rally.serverSlot].points + 1);
+        setScore[serverSide] = Math.min(99, setScore[serverSide] + 1);
+        nextRally = rotateServerAndReceiverOnScore();
+    } else if (outcome === 'receiver-error') {
+        statRow[rally.serverSlot].points = Math.min(99, statRow[rally.serverSlot].points + 1);
+        statRow[rally.receiverSlot].errors = Math.min(99, statRow[rally.receiverSlot].errors + 1);
+        setScore[serverSide] = Math.min(99, setScore[serverSide] + 1);
+        nextRally = rotateServerAndReceiverOnScore();
+    } else if (outcome === 'server-out') {
+        statRow[rally.serverSlot].errors = Math.min(99, statRow[rally.serverSlot].errors + 1);
+        nextRally = advanceRallyServeTurn(rally, pairA, pairB);
+    } else if (outcome === 'receiver-win') {
+        statRow[rally.receiverSlot].points = Math.min(99, statRow[rally.receiverSlot].points + 1);
+        nextRally = advanceRallyServeTurn(rally, pairA, pairB);
+    }
+
+    return { statRow, setScore, rally: nextRally };
+}
+
+export function normalizeSetPlayerStats(rawStats, setCount = 1) {
+    const count = Math.max(1, Number(setCount) || 1);
+    const list = Array.isArray(rawStats) ? rawStats : [];
+    return Array.from({ length: count }, (_, idx) => {
+        const row = list[idx] && typeof list[idx] === 'object' ? list[idx] : {};
+        const clampStat = (slot) => ({
+            points: Math.max(0, Math.min(99, Number(row[slot]?.points) || 0)),
+            errors: Math.max(0, Math.min(99, Number(row[slot]?.errors) || 0))
+        });
+        return {
+            a1: clampStat('a1'),
+            a2: clampStat('a2'),
+            b1: clampStat('b1'),
+            b2: clampStat('b2')
+        };
+    });
+}
+
+export function sumSubMatchPlayerStats(subMatch) {
+    const setsLen = Array.isArray(subMatch?.sets) ? subMatch.sets.length : 1;
+    const rawArr = subMatch?.format_override?.setPlayerStats;
+    const rows = normalizeSetPlayerStats(rawArr, Math.max(setsLen, Array.isArray(rawArr) ? rawArr.length : 1));
+    const totals = {
+        a1: EMPTY_STAT_SLOT(),
+        a2: EMPTY_STAT_SLOT(),
+        b1: EMPTY_STAT_SLOT(),
+        b2: EMPTY_STAT_SLOT()
+    };
+    for (const r of rows) {
+        for (const key of ['a1', 'a2', 'b1', 'b2']) {
+            totals[key].points += r[key].points;
+            totals[key].errors += r[key].errors;
+        }
+    }
+    return totals;
+}
+
+/**
+ * Ranks all fixed pairs across ALL matches (round_robin + playoff) for "Cặp Đôi Ăn Ý":
+ * Most Pair Wins -> Best Point Differential -> Best Set Differential -> Most Points For.
+ */
+export function calculatePairLeaderboard(teams, teamPairs, teamMatches, subMatches, tournamentConfig) {
+    const config = normalizeConfig(tournamentConfig);
+    const teamsMap = new Map((teams || []).map((t) => [t.id, t]));
+    const statsMap = calculatePairStats(teamPairs, teamMatches, subMatches, config);
+
+    const rows = (teamPairs || []).map((pair) => {
+        const team = teamsMap.get(pair.team_id) || { id: pair.team_id, name: '?', code: '?', color: '#0E7C5B', seed_order: 99 };
+        const st = statsMap.get(pair.id) || {
+            played: 0, wins: 0, losses: 0, setsWon: 0, setsLost: 0, pointsFor: 0, pointsAgainst: 0, pointDiff: 0
+        };
+        const setDiff = st.setsWon - st.setsLost;
+        return {
+            pair,
+            team,
+            levelName: config.levelNames[pair.level_index - 1] || `Level ${pair.level_index}`,
+            playersText: `${pair.player_1 || ''}${pair.player_2 ? ` / ${pair.player_2}` : ''}`.trim() || pair.pair_label,
+            ...st,
+            setDiff
+        };
+    });
+
+    rows.sort((x, y) => {
+        if (y.wins !== x.wins) return y.wins - x.wins;
+        if (y.pointDiff !== x.pointDiff) return y.pointDiff - x.pointDiff;
+        if (y.setDiff !== x.setDiff) return y.setDiff - x.setDiff;
+        if (y.pointsFor !== x.pointsFor) return y.pointsFor - x.pointsFor;
+        return (x.team.seed_order ?? 99) - (y.team.seed_order ?? 99) || (x.pair.level_index ?? 1) - (y.pair.level_index ?? 1);
+    });
+
+    return rows.map((row, idx) => ({ rank: idx + 1, ...row }));
+}
+
+/**
+ * Aggregates individual player Points Scored & Out/Net Errors across ALL matches
+ * (regardless of whether their pair or team won or lost).
+ */
+export function calculatePlayerLeaderboard(teams, teamPairs, teamMatches, subMatches, tournamentConfig) {
+    const config = normalizeConfig(tournamentConfig);
+    const teamsMap = new Map((teams || []).map((t) => [t.id, t]));
+    const pairsMap = new Map((teamPairs || []).map((p) => [p.id, p]));
+    const playersMap = new Map();
+
+    const sortedMatches = [...(teamMatches || [])].sort((a, b) => {
+        if ((a.stage || 'round_robin') !== (b.stage || 'round_robin')) {
+            return a.stage === 'playoff' ? 1 : -1;
+        }
+        return (a.round_number ?? 1) - (b.round_number ?? 1) || (a.sort_order ?? 1) - (b.sort_order ?? 1);
+    });
+
+    const ensurePlayerEntry = (nameRaw, team, pair) => {
+        const name = String(nameRaw || '').trim();
+        if (!name || !team) return null;
+        const key = `${team.id}::${name.toLowerCase()}`;
+        if (!playersMap.has(key)) {
+            playersMap.set(key, {
+                key,
+                name,
+                team,
+                pairLabelsSet: new Set(),
+                levelNamesSet: new Set(),
+                matchesPlayed: 0,
+                pairWins: 0,
+                pairLosses: 0,
+                totalPoints: 0,
+                totalErrors: 0,
+                matchLogs: []
+            });
+        }
+        const entry = playersMap.get(key);
+        if (pair?.pair_label) entry.pairLabelsSet.add(pair.pair_label);
+        if (pair?.level_index) {
+            entry.levelNamesSet.add(config.levelNames[pair.level_index - 1] || `Level ${pair.level_index}`);
+        }
+        return entry;
+    };
+
+    // Pre-seed every registered roster player so 0-point players still appear cleanly when needed
+    for (const pair of teamPairs || []) {
+        const team = teamsMap.get(pair.team_id);
+        ensurePlayerEntry(pair.player_1, team, pair);
+        ensurePlayerEntry(pair.player_2, team, pair);
+    }
+
+    for (const tm of sortedMatches) {
+        const teamA = teamsMap.get(tm.team_a_id);
+        const teamB = teamsMap.get(tm.team_b_id);
+        const evTm = evaluateTeamMatch(tm, subMatches, config);
+
+        for (const sm of evTm.subMatches) {
+            const ev = sm.eval;
+            const sums = sumSubMatchPlayerStats(sm);
+            const hasStats = ['a1', 'a2', 'b1', 'b2'].some((k) => sums[k].points > 0 || sums[k].errors > 0);
+            const hasPlayedScore = (ev.sets || []).some((s) => s.a > 0 || s.b > 0);
+            if (!ev.isDecided && ev.effectiveStatus !== 'live' && !hasStats && !hasPlayedScore) {
+                continue;
+            }
+
+            const pairA = sm.pair_a_id ? pairsMap.get(sm.pair_a_id) : null;
+            const pairB = sm.pair_b_id ? pairsMap.get(sm.pair_b_id) : null;
+            const scoreSummary = (ev.sets || []).map((s) => `${s.a}-${s.b}`).join(', ');
+            const levelName = config.levelNames[sm.level_index - 1] || `Level ${sm.level_index}`;
+
+            const recordSide = (pair, team, oppTeam, oppPair, slot1, slot2, sideKey) => {
+                if (!pair || !team) return;
+                const wonPair = ev.winner === sideKey;
+                const lostPair = Boolean(ev.winner && ev.winner !== sideKey);
+                const oppName = oppTeam?.code || oppPair?.pair_label || '?';
+                const logBase = {
+                    matchId: tm.id,
+                    subId: sm.id,
+                    roundName: tm.round_name || `Vòng ${tm.round_number || 1}`,
+                    levelName,
+                    opponentLabel: oppName,
+                    scoreSummary,
+                    wonPair,
+                    lostPair
+                };
+
+                for (const [playerName, slotKey] of [[pair.player_1, slot1], [pair.player_2, slot2]]) {
+                    const pEntry = ensurePlayerEntry(playerName, team, pair);
+                    if (!pEntry) continue;
+                    const pts = sums[slotKey].points;
+                    const errs = sums[slotKey].errors;
+                    pEntry.matchesPlayed += 1;
+                    if (wonPair) pEntry.pairWins += 1;
+                    if (lostPair) pEntry.pairLosses += 1;
+                    pEntry.totalPoints += pts;
+                    pEntry.totalErrors += errs;
+                    pEntry.matchLogs.push({ ...logBase, points: pts, errors: errs });
+                }
+            };
+
+            recordSide(pairA, teamA, teamB, pairB, 'a1', 'a2', 'A');
+            recordSide(pairB, teamB, teamA, pairA, 'b1', 'b2', 'B');
+        }
+    }
+
+    const baseList = Array.from(playersMap.values()).map((p) => ({
+        ...p,
+        pairLabel: Array.from(p.pairLabelsSet).join(', '),
+        levelLabel: Array.from(p.levelNamesSet).join(', '),
+        avgPoints: p.matchesPlayed > 0 ? Number((p.totalPoints / p.matchesPlayed).toFixed(1)) : 0,
+        avgErrors: p.matchesPlayed > 0 ? Number((p.totalErrors / p.matchesPlayed).toFixed(1)) : 0
+    }));
+
+    const byPoints = [...baseList]
+        .sort((a, b) => {
+            if (b.totalPoints !== a.totalPoints) return b.totalPoints - a.totalPoints;
+            if (a.totalErrors !== b.totalErrors) return a.totalErrors - b.totalErrors;
+            if (b.matchesPlayed !== a.matchesPlayed) return b.matchesPlayed - a.matchesPlayed;
+            return a.name.localeCompare(b.name, 'vi');
+        })
+        .map((row, idx) => ({ rank: idx + 1, ...row }));
+
+    const byErrors = [...baseList]
+        .sort((a, b) => {
+            if (b.totalErrors !== a.totalErrors) return b.totalErrors - a.totalErrors;
+            if (b.matchesPlayed !== a.matchesPlayed) return b.matchesPlayed - a.matchesPlayed;
+            if (a.totalPoints !== b.totalPoints) return a.totalPoints - b.totalPoints;
+            return a.name.localeCompare(b.name, 'vi');
+        })
+        .map((row, idx) => ({ rank: idx + 1, ...row }));
+
+    return {
+        players: baseList,
+        byPoints,
+        byErrors,
+        hasAnyStats: baseList.some((p) => p.totalPoints > 0 || p.totalErrors > 0)
+    };
 }
 
 /**

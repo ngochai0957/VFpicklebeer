@@ -2,18 +2,31 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+    advanceRallyServeTurn,
+    applyRallyOutcomeToSet,
     buildCourtBoard,
     buildResizedRoster,
+    calculatePairLeaderboard,
+    calculatePlayerLeaderboard,
     calculateStandings,
+    combineScheduleValue,
     escapeHtml,
     evaluateSetWinner,
     evaluateSubMatch,
     evaluateTeamMatch,
+    formatScheduleDisplay,
     generateRoundRobinSchedule,
-    normalizeConfig
+    normalizeConfig,
+    normalizeRallyState,
+    normalizeSetPlayerStats,
+    parseScheduleValue,
+    resolveSubMatchSchedule,
+    selectRallyRole,
+    swapRallyCourtOrder
 } from '../js/tournament-engine.js';
 import { createInitialDemoState } from '../js/demo-data.js';
 import {
+    renderAwardsTab,
     renderLiveSpotlight,
     renderMatchesTab,
     renderRulesTab,
@@ -235,18 +248,16 @@ test('Court Board, Form guide, Tiebreaker annotation, Player Search, and TV Mode
     assert.equal(courts[0].live.length, 1);
     assert.equal(courts[0].upcoming.length, 1);
 
-    // Player search filters to matches involving Minh Khôi
-    const searchMatchesHtml = renderMatchesTab(state, { status: 'all', round: 'all', teamId: 'all', view: 'list', query: 'minh khoi' }, false);
+    // Player search filters to matches involving Minh Khôi and omits removed Court Board toggle
+    const searchMatchesHtml = renderMatchesTab(state, { status: 'all', round: 'all', teamId: 'all', query: 'minh khoi' }, false);
     assert.ok(searchMatchesHtml.includes('Minh Khôi'));
     assert.equal(searchMatchesHtml.includes('Vòng 1: Team C'), false);
-
-    // Court Board & TV Mode render cleanly
-    const courtViewHtml = renderMatchesTab(state, { status: 'all', round: 'all', teamId: 'all', view: 'courts', query: '' }, false);
-    assert.ok(courtViewHtml.includes('Sắp lên sân (Next Up)'));
+    assert.equal(searchMatchesHtml.includes('data-action="matches-view"'), false);
+    assert.equal(searchMatchesHtml.includes('Điều phối Sân'), false);
 
     const tvHtml = renderTvModeView(state);
     assert.ok(tvHtml.includes('TV Mode'));
-    assert.ok(tvHtml.includes('VACIF PickleBeer'));
+    assert.ok(tvHtml.includes('VaciF PickleBeer 2026 Team League'));
 });
 
 test('Live view hides upcoming pairs, shows ready pairs subdued, and distinguishes Set 1-3 vs Chung cuoc', () => {
@@ -339,4 +350,235 @@ test('Live view hides upcoming pairs, shows ready pairs subdued, and distinguish
     const customOrderHtml = renderTeamMatchCard(liveMatch, cardContext, false);
     assert.ok(customOrderHtml.indexOf('Level 2') < customOrderHtml.indexOf('Level 1'));
     assert.ok(customOrderHtml.indexOf('Level 1') < customOrderHtml.indexOf('Level 3'));
+});
+
+test('Supports match date + time scheduling and simultaneous multi-court pair assignment', () => {
+    const combined = combineScheduleValue('2026-11-22', '08:30');
+    assert.equal(combined, '2026-11-22 · 08:30');
+    assert.deepEqual(parseScheduleValue(combined), { date: '2026-11-22', time: '08:30' });
+    assert.equal(formatScheduleDisplay('2026-11-22', '08:30'), '22/11/2026 · 08:30');
+
+    const state = createInitialDemoState('main');
+    const liveMatch = state.teamMatches.find((m) => m.status === 'live');
+    liveMatch.court = 'Sân 1';
+    liveMatch.scheduled_time = combined;
+
+    const subs = state.subMatches.filter((s) => s.team_match_id === liveMatch.id).sort((a, b) => a.level_index - b.level_index);
+    subs[0].status = 'live';
+    subs[0].format_override = { court: 'Sân 1' };
+    subs[1].status = 'live';
+    subs[1].format_override = { court: 'Sân 2', scheduledTime: '09:00' };
+    subs[2].status = 'live';
+    subs[2].format_override = { court: 'Sân 3' };
+
+    const s2Resolved = resolveSubMatchSchedule(subs[1], liveMatch);
+    assert.equal(s2Resolved.court, 'Sân 2');
+    assert.equal(s2Resolved.time, '09:00');
+    assert.equal(s2Resolved.hasCustomCourt, true);
+    assert.equal(s2Resolved.hasCustomTime, true);
+
+    const cardContext = {
+        teamsMap: new Map(state.teams.map((t) => [t.id, t])),
+        pairsMap: new Map(state.teamPairs.map((p) => [p.id, p])),
+        subMatches: state.subMatches,
+        config: normalizeConfig(state.tournament.config)
+    };
+    const cardHtml = renderTeamMatchCard(liveMatch, cardContext, false);
+    assert.ok(cardHtml.includes('22/11/2026 · 08:30'));
+    assert.ok(cardHtml.includes('Sân 1 · Sân 2 · Sân 3'));
+    assert.ok(cardHtml.includes('Sân 2 · 09:00'));
+    assert.equal(cardHtml.includes('Sân 2 · 22/11/2026'), false);
+
+    // Court board splits the Team Match across Sân 1, Sân 2, and Sân 3 when pairs run on different courts
+    const courts = buildCourtBoard(state.teamMatches, state.subMatches, state.tournament.config);
+    const san3 = courts.find((c) => c.court === 'Sân 3');
+    assert.ok(san3);
+    assert.equal(san3.live.length, 1);
+    assert.equal(san3.live[0].subLabel, 'Level 3');
+
+    // Admin forms include date pickers + per-pair court/schedule inputs
+    const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: liveMatch.id }, 'supabase');
+    assert.ok(adminScoresHtml.includes('name="scheduled_date"'));
+    assert.ok(adminScoresHtml.includes('data-action="assign-multi-courts"'));
+    assert.ok(adminScoresHtml.includes('data-action="sub-override-field"'));
+    const adminSchedHtml = renderAdminTab(state, { subtab: 'schedule', selectedMatchId: liveMatch.id }, 'supabase');
+    assert.ok(adminSchedHtml.includes('name="scheduled_date"'));
+});
+
+test('Awards leaderboards rank Best Pair, Top Scorer (regardless of win/loss), and Out/Net Errors', () => {
+    const state = createInitialDemoState('main');
+    const pairBoard = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, state.tournament.config);
+    assert.ok(pairBoard.length >= 12);
+    // A1 won both matches (2-0) -> ranked #1
+    assert.equal(pairBoard[0].pair.id, 'pair_a_1');
+    assert.equal(pairBoard[0].wins, 2);
+
+    const playerBoard = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, state.tournament.config);
+    assert.equal(playerBoard.hasAnyStats, true);
+    // Top scorer has matchLogs recording points after every played match
+    const topScorer = playerBoard.byPoints[0];
+    assert.ok(topScorer.totalPoints > 0);
+    assert.ok(topScorer.matchLogs.length >= 1);
+
+    // Explicitly verify a losing player scoring massive individual points still tops the scorer board
+    const losingSub = state.subMatches.find((s) => s.id === 'sm_r1_ab_2');
+    losingSub.format_override = {
+        setPlayerStats: [
+            { a1: { points: 10, errors: 1 }, a2: { points: 0, errors: 0 }, b1: { points: 1, errors: 10 }, b2: { points: 0, errors: 0 } },
+            { a1: { points: 10, errors: 0 }, a2: { points: 0, errors: 0 }, b1: { points: 1, errors: 10 }, b2: { points: 0, errors: 0 } },
+            { a1: { points: 15, errors: 0 }, a2: { points: 0, errors: 0 }, b1: { points: 1, errors: 15 }, b2: { points: 0, errors: 0 } }
+        ]
+    };
+    const updatedBoard = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, state.tournament.config);
+    // Tuấn Anh (pair_a_2) lost sm_r1_ab_2 (1-2) but gets full 35 pts from that match + 14 pts in r2 = 49 pts
+    assert.equal(updatedBoard.byPoints[0].name, 'Tuấn Anh');
+    assert.equal(updatedBoard.byPoints[0].totalPoints, 49);
+    // Trung Kiên (pair_b_2) won but hit 35 Out/Net errors in sm_r1_ab_2 + errors in r2
+    assert.equal(updatedBoard.byErrors[0].name, 'Trung Kiên');
+    assert.ok(updatedBoard.byErrors[0].totalErrors >= 35);
+
+    // Public Awards tab & Admin player stat controls render safely
+    state.teams[0].name = 'Team A <script>xss</script>';
+    const awardsHtml = renderAwardsTab(state, { teamId: 'all', query: '' });
+    assert.equal(awardsHtml.includes('<script>xss</script>'), false);
+    assert.equal(awardsHtml.includes('admin-edit-match'), false);
+    assert.ok(awardsHtml.includes('Cặp Đôi Ăn Ý'));
+    assert.ok(awardsHtml.includes('Bảng Point Cá Nhân'));
+    assert.ok(awardsHtml.includes('Thống Kê Đánh Out'));
+    assert.ok(awardsHtml.includes('Tuấn Anh'));
+
+    const standingsHtml = renderStandingsTab(state, false);
+    assert.ok(standingsHtml.includes('Giải Phụ &amp; Thống Kê Cá Nhân'));
+
+    const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: 'tm_r1_ab' }, 'local');
+    assert.equal(adminScoresHtml.includes('data-action="step-player-stat"'), false);
+    assert.equal(adminScoresHtml.includes('data-action="input-player-stat"'), false);
+    assert.equal(adminScoresHtml.includes('data-action="input-score"'), false);
+    assert.equal(adminScoresHtml.includes('data-action="step-score"'), false);
+    assert.equal(adminScoresHtml.includes('data-action="toggle-sync-set-score"'), false);
+    assert.ok(adminScoresHtml.includes('set-readonly-board'));
+    assert.ok(adminScoresHtml.includes('Out/Lưới'));
+});
+
+test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on score, and Side-Out controls', () => {
+    const pairA = { id: 'pA', player_1: 'Hải Đăng', player_2: 'Gia Huy' };
+    const pairB = { id: 'pB', player_1: 'Phúc Lâm', player_2: 'Khánh Duy' };
+
+    // Default Start: Position 1 (Right) a1 serves at Turn 1 to Position 1 (Right) b1
+    let rally = normalizeRallyState(null, pairA, pairB);
+    assert.deepEqual(rally, {
+        serverSlot: 'a1',
+        receiverSlot: 'b1',
+        serveTurn: 1,
+        orderA: ['a1', 'a2'],
+        orderB: ['b1', 'b2']
+    });
+
+    // Swapping pair B Start positions (1 <-> 2) puts b2 at Pos 1 (Right) and b1 at Pos 2 (Left)
+    rally = swapRallyCourtOrder(rally, 'b', pairA, pairB);
+    assert.deepEqual(rally.orderB, ['b2', 'b1']);
+
+    // Selecting receiver on same team as current server automatically switches server to opposite diagonal pos (#2 -> b1)
+    rally = selectRallyRole(rally, 'receiver', 'a2', pairA, pairB);
+    assert.equal(rally.serverSlot, 'b1');
+    assert.equal(rally.receiverSlot, 'a2');
+    assert.equal(rally.serveTurn, 1);
+
+    // Fault at Serve 1 -> Partner b2 Serve 2 diagonally to opposite receiver a1 (#1 Phải)
+    rally = advanceRallyServeTurn(rally, pairA, pairB);
+    assert.equal(rally.serverSlot, 'b2');
+    assert.equal(rally.receiverSlot, 'a1');
+    assert.equal(rally.serveTurn, 2);
+
+    // Fault at Serve 2 -> Side-out back to pair A Pos 1 (a1) at Serve 1 -> pair B Pos 1 (b2)
+    rally = advanceRallyServeTurn(rally, pairA, pairB);
+    assert.equal(rally.serverSlot, 'a1');
+    assert.equal(rally.receiverSlot, 'b2');
+    assert.equal(rally.serveTurn, 1);
+
+    // Reset to clean orderA=['a1','a2'], orderB=['b1','b2'], a1 -> b1, Serve 1, Set 0:0
+    rally = normalizeRallyState(null, pairA, pairB);
+    let stats = normalizeSetPlayerStats(null, 1)[0];
+    let score = { a: 0, b: 0 };
+
+    // 1. Server ace -> a1 +1 pt, Set A +1, server side SWAPS court order ([a2, a1] -> a1 now #2 Left) AND receiver switches b1 -> b2 (#2 Left)!
+    let res = applyRallyOutcomeToSet(stats, score, rally, 'server-ace', pairA, pairB);
+    stats = res.statRow;
+    score = res.setScore;
+    rally = res.rally;
+    assert.equal(stats.a1.points, 1);
+    assert.equal(stats.b1.errors, 0);
+    assert.deepEqual(score, { a: 1, b: 0 });
+    assert.deepEqual(rally.orderA, ['a2', 'a1']);
+    assert.equal(rally.serverSlot, 'a1');
+    assert.equal(rally.serveTurn, 1);
+    assert.equal(rally.receiverSlot, 'b2');
+
+    // 2. Receiver error on b2 -> a1 +1 pt, b2 +1 error, Set A +1, server side SWAPS back ([a1, a2] -> a1 #1 Right) AND receiver switches b2 -> b1 (#1 Right)!
+    res = applyRallyOutcomeToSet(stats, score, rally, 'receiver-error', pairA, pairB);
+    stats = res.statRow;
+    score = res.setScore;
+    rally = res.rally;
+    assert.equal(stats.a1.points, 2);
+    assert.equal(stats.b2.errors, 1);
+    assert.deepEqual(score, { a: 2, b: 0 });
+    assert.deepEqual(rally.orderA, ['a1', 'a2']);
+    assert.equal(rally.serverSlot, 'a1');
+    assert.equal(rally.serveTurn, 1);
+    assert.equal(rally.receiverSlot, 'b1');
+
+    // 3. Server fault -> +1 server error, 0 Set points, Serve 1 -> partner a2 Serve 2 facing b2
+    res = applyRallyOutcomeToSet(stats, score, rally, 'server-out', pairA, pairB);
+    stats = res.statRow;
+    score = res.setScore;
+    rally = res.rally;
+    assert.equal(stats.a1.errors, 1);
+    assert.deepEqual(score, { a: 2, b: 0 });
+    assert.equal(rally.serverSlot, 'a2');
+    assert.equal(rally.serveTurn, 2);
+    assert.equal(rally.receiverSlot, 'b2');
+
+    // 4. Receiver wins rally on b2 -> +1 pt b2, 0 Set points, Serve 2 -> Side-out to b1 Serve 1 facing a1
+    res = applyRallyOutcomeToSet(stats, score, rally, 'receiver-win', pairA, pairB);
+    stats = res.statRow;
+    score = res.setScore;
+    rally = res.rally;
+    assert.equal(stats.b2.points, 1);
+    assert.deepEqual(score, { a: 2, b: 0 });
+    assert.equal(rally.serverSlot, 'b1');
+    assert.equal(rally.serveTurn, 1);
+    assert.equal(rally.receiverSlot, 'a1');
+
+    // Admin UI places WIN badge beside winning team (A1 WIN on A side, B2 WIN on B side), with exact 4 action labels
+    const state = createInitialDemoState();
+    const adminHtml = renderAdminTab(state, {
+        subtab: 'scores',
+        selectedMatchId: 'tm_r1_ab',
+        rallyBySet: {
+            'sm_r1_ab_1:0': { serverSlot: 'a2', receiverSlot: 'b1', serveTurn: 2 }
+        },
+        rallyUndoBySet: {
+            'sm_r1_ab_1:0': [{ setScore: { a: 10, b: 7 } }]
+        }
+    }, 'local');
+    assert.match(adminHtml, /WIN<\/span>\s*<span class="set-team-tag"[^>]*>A1<\/span>/);
+    assert.match(adminHtml, /<span class="set-team-tag"[^>]*>B2<\/span>\s*<span class="set-auto-badge win">[^<]*WIN<\/span>/);
+    assert.equal(adminHtml.includes('SIDE-OUT'), false);
+    assert.ok(adminHtml.includes('tấn công chính xác'));
+    assert.ok(adminHtml.includes('đỡ hỏng'));
+    assert.ok(adminHtml.includes('phát hỏng'));
+    assert.ok(adminHtml.includes('phòng thủ thành công'));
+    assert.ok(adminHtml.includes('data-action="swap-court-order"'));
+    assert.ok(adminHtml.includes('1 · Phải'));
+    assert.ok(adminHtml.includes('2 · Trái'));
+    assert.ok(adminHtml.includes('data-action="select-rally-role"'));
+    assert.ok(adminHtml.includes('data-action="set-serve-turn"'));
+    assert.ok(adminHtml.includes('data-outcome="server-ace"'));
+    assert.ok(adminHtml.includes('data-outcome="receiver-error"'));
+    assert.ok(adminHtml.includes('data-outcome="server-out"'));
+    assert.ok(adminHtml.includes('data-outcome="receiver-win"'));
+    assert.ok(adminHtml.includes('data-action="undo-rally-outcome"'));
+    assert.ok(adminHtml.includes('data-action="reset-set-stats"'));
+    assert.ok(adminHtml.includes('Hoàn tác (1)'));
+    assert.ok(adminHtml.includes('Phát 2'));
 });
