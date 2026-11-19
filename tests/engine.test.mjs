@@ -218,11 +218,19 @@ test('Public UI renders cleanly with zero admin edit controls and escapes unsafe
     assert.ok(matchesHtml.includes('Vòng 1'));
 });
 
-test('Admin UI renders all 4 subtabs and Supabase login hides local PIN hint', () => {
+test('Admin UI renders all 4 subtabs and clean password-only login modal', () => {
     const state = createInitialDemoState('main');
     const supabaseModal = renderAdminLoginModal('supabase', '');
     assert.equal(supabaseModal.includes('admin123'), false);
-    assert.ok(supabaseModal.includes('Supabase Auth + RLS'));
+    assert.equal(supabaseModal.includes('Supabase Auth + RLS'), false);
+    assert.equal(supabaseModal.includes('Tài khoản:'), false);
+    assert.equal(supabaseModal.includes('@gmail.com'), false);
+    assert.ok(supabaseModal.includes('id="admin-login-password"'));
+
+    const localModal = renderAdminLoginModal('local', '');
+    assert.equal(localModal.includes('admin123'), false);
+    assert.equal(localModal.includes('Chế độ Demo Local'), false);
+    assert.ok(localModal.includes('id="admin-login-password"'));
 
     for (const subtab of ['scores', 'teams', 'schedule', 'settings']) {
         const html = renderAdminTab(state, { subtab, selectedMatchId: state.teamMatches[0].id }, 'supabase');

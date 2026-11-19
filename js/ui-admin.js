@@ -16,20 +16,6 @@ export function renderAdminLoginModal(storeMode, errorMessage = '') {
     const isSupabase = storeMode === 'supabase';
     const hasConfiguredEmail = Boolean((APP_CONFIG.ADMIN_EMAIL || '').trim());
 
-    const hintHtml = isSupabase
-        ? `
-            <div class="alert alert-info">
-                <strong>Bảo mật Supabase Auth + RLS:</strong> Chỉ duy nhất tài khoản Admin được đăng ký trong
-                <code>admin_users</code> mới có quyền ghi dữ liệu lên máy chủ.
-            </div>
-        `
-        : `
-            <div class="alert alert-warn">
-                <strong>Chế độ Demo Local:</strong> Bạn chưa kết nối Supabase nên dữ liệu đang lưu tạm trên trình duyệt này.
-                Mã PIN mặc định để thử nghiệm: <code>${escapeHtml(APP_CONFIG.LOCAL_DEMO_PIN)}</code> (cấu hình trong <code>js/config.js</code>).
-            </div>
-        `;
-
     const emailFieldHtml = isSupabase && !hasConfiguredEmail
         ? `
             <div class="form-group">
@@ -37,9 +23,7 @@ export function renderAdminLoginModal(storeMode, errorMessage = '') {
                 <input id="admin-login-email" name="email" type="email" class="form-input" required placeholder="admin@yourdomain.com" autocomplete="username">
             </div>
         `
-        : (isSupabase && hasConfiguredEmail
-            ? `<div class="section-sub" style="margin-bottom:12px;">Tài khoản: <strong>${escapeHtml(APP_CONFIG.ADMIN_EMAIL)}</strong></div>`
-            : '');
+        : '';
 
     return `
         <div class="modal-backdrop" data-action="close-modal">
@@ -49,11 +33,10 @@ export function renderAdminLoginModal(storeMode, errorMessage = '') {
                     <button type="button" class="modal-close" data-action="close-modal" aria-label="Đóng">✕</button>
                 </div>
                 <form class="modal-body" id="admin-login-form">
-                    ${hintHtml}
                     ${errorMessage ? `<div class="alert alert-error">${escapeHtml(errorMessage)}</div>` : ''}
                     ${emailFieldHtml}
                     <div class="form-group">
-                        <label class="form-label" for="admin-login-password">Mật khẩu / PIN Quản trị</label>
+                        <label class="form-label" for="admin-login-password">Mật khẩu Quản trị</label>
                         <input id="admin-login-password" name="password" type="password" class="form-input" required placeholder="Nhập mật khẩu quản trị..." autocomplete="current-password" autofocus>
                     </div>
                     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
