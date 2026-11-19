@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
     advanceRallyServeTurn,
@@ -230,7 +231,18 @@ test('Admin UI renders all 4 subtabs and clean password-only login modal', () =>
     const localModal = renderAdminLoginModal('local', '');
     assert.equal(localModal.includes('admin123'), false);
     assert.equal(localModal.includes('Chế độ Demo Local'), false);
+    assert.equal(localModal.includes('stopPropagation'), false);
     assert.ok(localModal.includes('id="admin-login-password"'));
+
+    const stylesCss = readFileSync(new URL('../css/styles.css', import.meta.url), 'utf8');
+    assert.equal(stylesCss.includes('outline: 3px solid var(--accent)'), false);
+    assert.ok(stylesCss.includes('box-shadow: 0 0 0 3px rgba(14, 124, 91, 0.14)'));
+
+    const appJs = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+    const publicJs = readFileSync(new URL('../js/ui-public.js', import.meta.url), 'utf8');
+    assert.equal(appJs.includes('stopPropagation'), false);
+    assert.equal(publicJs.includes('stopPropagation'), false);
+    assert.ok(appJs.includes("el.classList.contains('modal-backdrop') && event?.target !== el"));
 
     for (const subtab of ['scores', 'teams', 'schedule', 'settings']) {
         const html = renderAdminTab(state, { subtab, selectedMatchId: state.teamMatches[0].id }, 'supabase');

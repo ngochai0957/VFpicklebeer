@@ -27,7 +27,7 @@ export function renderAdminLoginModal(storeMode, errorMessage = '') {
 
     return `
         <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-card" onclick="event.stopPropagation()">
+            <div class="modal-card">
                 <div class="modal-header">
                     <h3 class="modal-title">Đăng nhập Quản trị (Admin)</h3>
                     <button type="button" class="modal-close" data-action="close-modal" aria-label="Đóng">✕</button>

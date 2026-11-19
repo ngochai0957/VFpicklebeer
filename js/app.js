@@ -402,7 +402,7 @@ function renderModal() {
     if (appState.modal.type === 'setup-help') {
         modalRoot.innerHTML = `
             <div class="modal-backdrop" data-action="close-modal">
-                <div class="modal-card wide" onclick="event.stopPropagation()">
+                <div class="modal-card wide">
                     <div class="modal-header">
                         <h3 class="modal-title">Hướng dẫn kết nối Supabase (Miễn phí • Realtime • 3 phút)</h3>
                         <button type="button" class="modal-close" data-action="close-modal" aria-label="Đóng">✕</button>
@@ -773,6 +773,9 @@ async function handleAction(action, el, event) {
     }
 
     if (action === 'close-modal') {
+        if (el.classList.contains('modal-backdrop') && event?.target !== el) {
+            return;
+        }
         appState.modal = null;
         renderModal();
         return;

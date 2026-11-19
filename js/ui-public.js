@@ -1231,7 +1231,7 @@ export function renderTeamDetailModal(teamId, state) {
 
     return `
         <div class="modal-backdrop" data-action="close-modal">
-            <div class="modal-card wide" onclick="event.stopPropagation()">
+            <div class="modal-card wide">
                 <div class="modal-header" style="background:var(--tint);">
                     <div style="display:flex;align-items:center;gap:10px;">
                         <span class="team-code-dot" style="background:${escapeHtml(team.color)}">${escapeHtml(team.code)}</span>
