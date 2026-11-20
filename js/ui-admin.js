@@ -13,6 +13,7 @@ import {
     normalizeConfig,
     normalizeRallyState,
     normalizeSetPlayerStats,
+    normalizeSetRallyLogs,
     normalizeSkillLevel,
     parseScheduleValue,
     summarizeRegistrations
@@ -94,6 +95,53 @@ export function renderAdminLoginModal(storeMode, errorMessage = '') {
                     <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
                         <button type="button" class="btn btn-secondary" data-action="close-modal">Hủy</button>
                         <button type="submit" class="btn btn-primary">Mở quyền Quản trị</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+}
+
+export function renderEditRegistrationModal(reg) {
+    if (!reg) return '';
+    const currentSkill = normalizeSkillLevel(reg.skill_level || '');
+    const skillOptions = SKILL_LEVEL_OPTIONS.map((opt) => (
+        `<option value="${escapeHtml(opt)}" ${currentSkill === opt ? 'selected' : ''}>${escapeHtml(opt)}</option>`
+    )).join('');
+    const st = reg.status === 'approved' ? 'approved' : 'pending';
+
+    return `
+        <div class="modal-backdrop" data-action="close-modal">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <h3 class="modal-title">Chỉnh Sửa Thông Tin VĐV</h3>
+                    <button type="button" class="modal-close" data-action="close-modal" aria-label="Đóng">✕</button>
+                </div>
+                <form class="modal-body" id="admin-edit-registration-form" data-reg-id="${escapeHtml(reg.id)}">
+                    <div class="form-group">
+                        <label class="form-label" for="edit-reg-fullname">Họ và tên *</label>
+                        <input id="edit-reg-fullname" name="full_name" class="form-input" required maxlength="80" value="${escapeHtml(reg.full_name || '')}">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="edit-reg-displayname">Tên thi đấu</label>
+                        <input id="edit-reg-displayname" name="display_name" class="form-input" maxlength="40" value="${escapeHtml(reg.display_name || '')}" placeholder="Để trống nếu dùng họ và tên">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="edit-reg-skill">Trình độ (BTC xác nhận) *</label>
+                        <select id="edit-reg-skill" name="skill_level" class="form-select" required>
+                            ${skillOptions}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="edit-reg-status">Trạng thái</label>
+                        <select id="edit-reg-status" name="status" class="form-select">
+                            <option value="approved" ${st === 'approved' ? 'selected' : ''}>✓ Đã duyệt</option>
+                            <option value="pending" ${st === 'pending' ? 'selected' : ''}>Chờ duyệt</option>
+                        </select>
+                    </div>
+                    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;">
+                        <button type="button" class="btn btn-secondary" data-action="close-modal">Hủy</button>
+                        <button type="submit" class="btn btn-primary">Lưu thay đổi</button>
                     </div>
                 </form>
             </div>
@@ -199,6 +247,7 @@ function renderScoreOperatorSubtab(state, adminState) {
         const ev = sm.eval;
         const sets = Array.isArray(sm.sets) && sm.sets.length > 0 ? sm.sets : [{ a: 0, b: 0 }];
         const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+        const setRallyLogs = normalizeSetRallyLogs(sm.format_override?.setRallyLogs, sets.length);
         const currentBestOf = sm.format_override?.bestOf ? String(sm.format_override.bestOf) : 'default';
         const currentPts = sm.format_override?.pointsPerSet ? String(sm.format_override.pointsPerSet) : 'default';
         const hasCustomOrder = getSubMatchDisplayOrder(sm) !== null;
@@ -219,15 +268,28 @@ function renderScoreOperatorSubtab(state, adminState) {
             ...(pairB?.player_2 ? [[pairB.player_2, 'b2']] : [])
         ];
 
+        const firstUnfinishedSetIdx = sets.findIndex((_, i) => !ev.sets[i]?.winner);
+        const subStatus = ev.effectiveStatus || sm.status || 'upcoming';
+
         const setsRowsHtml = sets.map((s, setIdx) => {
             const setWinner = ev.sets[setIdx]?.winner;
+            const hasPoints = Number(s.a) > 0 || Number(s.b) > 0;
+            const isSetCompleted = Boolean(setWinner);
+            const isSetLive = !isSetCompleted && (hasPoints || (subStatus === 'live' && setIdx === firstUnfinishedSetIdx));
+            const setStateCls = isSetCompleted
+                ? 'set-state-completed'
+                : (isSetLive ? 'set-state-live' : 'set-state-waiting');
+
             const winBadge = setWinner === 'A'
-                ? `<span class="tag tag-status-completed">${escapeHtml(pairA?.pair_label || 'A')} thắng Set ${setIdx + 1}</span>`
+                ? `<span class="tag tag-status-completed">✓ ${escapeHtml(pairA?.pair_label || 'A')} thắng Set ${setIdx + 1}</span>`
                 : (setWinner === 'B'
-                    ? `<span class="tag tag-status-completed">${escapeHtml(pairB?.pair_label || 'B')} thắng Set ${setIdx + 1}</span>`
-                    : `<span class="tag tag-round">Set ${setIdx + 1}</span>`);
+                    ? `<span class="tag tag-status-completed">✓ ${escapeHtml(pairB?.pair_label || 'B')} thắng Set ${setIdx + 1}</span>`
+                    : (isSetLive
+                        ? `<span class="tag tag-status-live"><span class="pulse-dot"></span>Set ${setIdx + 1}</span>`
+                        : `<span class="tag tag-status-muted">Set ${setIdx + 1}</span>`));
 
             const rowStats = setStats[setIdx];
+            const setLogCount = (setRallyLogs[setIdx] || []).length;
             const rallyKey = `${sm.id}:${setIdx}`;
             const rallyState = normalizeRallyState(adminState.rallyBySet?.[rallyKey], pairA, pairB);
             const undoCount = Array.isArray(adminState.rallyUndoBySet?.[rallyKey])
@@ -248,19 +310,20 @@ function renderScoreOperatorSubtab(state, adminState) {
             const rightBoardBadge = setWinner === 'B'
                 ? '<span class="set-auto-badge win">🏆 WIN</span>'
                 : (!setWinner
-                    ? ((Number(s.a) > 0 || Number(s.b) > 0)
-                        ? '<span class="set-auto-badge live">ĐANG ĐẤU</span>'
-                        : '<span class="set-auto-badge">CHỜ ĐẤU</span>')
+                    ? (isSetLive
+                        ? '<span class="set-auto-badge live">● ĐANG ĐẤU</span>'
+                        : '<span class="set-auto-badge waiting">CHỜ ĐẤU</span>')
                     : '');
 
             const sideAHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideAMeta, rowStats, teamA?.color || '#2563EB', `Cặp ${pairA?.pair_label || 'A'}`, rallyState, 'a');
             const sideBHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideBMeta, rowStats, teamB?.color || '#E05328', `Cặp ${pairB?.pair_label || 'B'}`, rallyState, 'b');
 
             return `
-                <div class="set-editor-block" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">
+                <div class="set-editor-block ${setStateCls}" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">
                     <div class="set-editor-row set-sticky-scorebar">
                         <div class="set-sticky-meta">
                             ${winBadge}
+                            <button type="button" class="set-detail-btn ${setLogCount > 0 ? 'has-logs' : ''}" data-action="view-set-history" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" title="Xem lịch sử chi tiết từng lượt thi đấu Set ${setIdx + 1}">Chi tiết${setLogCount > 0 ? ` (${setLogCount})` : ''}</button>
                         </div>
 
                         <div class="set-readonly-board" title="Tỉ số Set tự cập nhật khi bên Phát ghi điểm (hiển thị WIN ngay bên đội thắng Set)">
@@ -321,9 +384,17 @@ function renderScoreOperatorSubtab(state, adminState) {
         const pairBCode = pairB?.pair_label || `${teamB?.code || 'B'}${sm.level_index}`;
         const pairANames = pairA ? `${pairA.player_1}${pairA.player_2 ? ` / ${pairA.player_2}` : ''}` : pairACode;
         const pairBNames = pairB ? `${pairB.player_1}${pairB.player_2 ? ` / ${pairB.player_2}` : ''}` : pairBCode;
+        const lvlTier = Math.max(1, Math.min(4, Number(sm.level_index) || 1));
+        const subStatusBadge = subStatus === 'live'
+            ? '<span class="tag tag-status-live"><span class="pulse-dot"></span>ĐANG ĐẤU</span>'
+            : (subStatus === 'ready'
+                ? '<span class="tag tag-status-ready">⏳ SẮP ĐẤU</span>'
+                : (subStatus === 'completed'
+                    ? '<span class="tag tag-status-completed">✓ ĐÃ XONG</span>'
+                    : '<span class="tag tag-status-muted">Chưa đấu</span>'));
 
         return `
-            <div class="scorer-sub-card">
+            <div class="scorer-sub-card status-${escapeHtml(subStatus)} lv-${lvlTier}">
                 <div class="scorer-sub-toprow">
                     <div class="scorer-sub-idgroup">
                         <span class="scorer-num-badge ${hasCustomOrder ? 'is-custom' : ''}">#${idx + 1}</span>
@@ -331,11 +402,14 @@ function renderScoreOperatorSubtab(state, adminState) {
                             <button type="button" class="btn-step sm" data-action="move-sub-order" data-sub-id="${escapeHtml(sm.id)}" data-dir="up" ${idx === 0 ? 'disabled' : ''} title="Đưa cặp này lên trước" aria-label="Đưa lên">&#8593;</button>
                             <button type="button" class="btn-step sm" data-action="move-sub-order" data-sub-id="${escapeHtml(sm.id)}" data-dir="down" ${idx === totalSubs - 1 ? 'disabled' : ''} title="Đưa cặp này xuống sau" aria-label="Đưa xuống">&#8595;</button>
                         </div>
-                        <span class="level-pill">${escapeHtml(levelName)}</span>
+                        <span class="level-pill lv-${lvlTier}">${escapeHtml(levelName)}</span>
                     </div>
-                    <span class="tag ${ev.winner ? 'tag-status-completed' : 'tag-round'}">
-                        Final: ${ev.setsWonA} - ${ev.setsWonB}${ev.winner ? ` (${ev.winner === 'A' ? escapeHtml(pairA?.pair_label || 'A') : escapeHtml(pairB?.pair_label || 'B')} thắng)` : ''}
-                    </span>
+                    <div class="scorer-sub-statusgroup">
+                        ${subStatusBadge}
+                        <span class="tag ${ev.winner ? 'tag-status-completed' : 'tag-round'}">
+                            Final: ${ev.setsWonA} - ${ev.setsWonB}${ev.winner ? ` (${ev.winner === 'A' ? escapeHtml(pairA?.pair_label || 'A') : escapeHtml(pairB?.pair_label || 'B')} thắng)` : ''}
+                        </span>
+                    </div>
                 </div>
 
                 <div class="scorer-sub-matchup">
@@ -352,10 +426,10 @@ function renderScoreOperatorSubtab(state, adminState) {
 
                 <div class="scorer-sub-toolbar">
                     <div class="scorer-sub-status-row">
-                        <button type="button" class="quick-chip ${ev.effectiveStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming" title="Ẩn trên màn hình Live">Chưa đấu</button>
-                        <button type="button" class="quick-chip ${ev.effectiveStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready" title="Hiện nhẹ trên màn hình Live để chuẩn bị">Sắp đấu</button>
-                        <button type="button" class="quick-chip live ${ev.effectiveStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">● Đang đấu</button>
-                        <button type="button" class="quick-chip ${ev.effectiveStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">✓ Xong</button>
+                        <button type="button" class="quick-chip upcoming ${subStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming" title="Ẩn trên màn hình Live">Chưa đấu</button>
+                        <button type="button" class="quick-chip ready ${subStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready" title="Hiện trên màn hình Live để chuẩn bị lên sân">⏳ Sắp đấu</button>
+                        <button type="button" class="quick-chip live ${subStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">● Đang đấu</button>
+                        <button type="button" class="quick-chip completed ${subStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">✓ Xong</button>
                     </div>
                     <div class="scorer-sub-settings-grid">
                         <div>
@@ -923,13 +997,13 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
         const displaySkill = normalizeSkillLevel(r.skill_level || '');
         const tierCls = getSkillTierClass(displaySkill);
 
-        const statusBtn = st === 'approved'
-            ? `<button type="button" class="tag reg-status-btn is-approved" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="pending" title="Bấm để chuyển lại Chờ duyệt">✓ Đã duyệt</button>`
+        const statusCellHtml = st === 'approved'
+            ? `<span class="tag reg-status-pill-row is-approved">✓ Đã duyệt</span>`
             : `<button type="button" class="tag reg-status-btn is-pending" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="approved" title="Bấm để duyệt VĐV này vào danh sách chính">Chờ duyệt</button>`;
 
         return `
             <tr class="reg-row">
-                <td class="tabular reg-col-idx">${idx + 1}</td>
+                <td class="tabular reg-col-idx"><span class="reg-idx-badge">${idx + 1}</span></td>
                 <td class="col-left reg-col-name">
                     <div class="reg-name-stack">
                         <strong>${escapeHtml(fullName)}</strong>
@@ -939,9 +1013,12 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                 <td class="col-left reg-col-nick"><span class="reg-nick-text">${escapeHtml(nickName)}</span></td>
                 <td class="col-left reg-col-skill"><span class="tag reg-skill-tag ${tierCls}">${escapeHtml(displaySkill)}</span></td>
                 <td class="tabular reg-col-date">${escapeHtml(formatRegDate(r.created_at))}</td>
-                <td class="reg-col-status">${statusBtn}</td>
-                <td class="reg-col-del">
-                    <button type="button" class="btn btn-danger btn-sm reg-del-btn" data-action="delete-registration" data-reg-id="${escapeHtml(r.id)}" title="Xóa phiếu này" aria-label="Xóa phiếu này">Xóa</button>
+                <td class="reg-col-status">${statusCellHtml}</td>
+                <td class="reg-col-actions">
+                    <div class="reg-row-actions">
+                        <button type="button" class="btn btn-secondary btn-sm reg-edit-btn" data-action="edit-registration" data-reg-id="${escapeHtml(r.id)}" title="Chỉnh sửa thông tin & hạng VĐV" aria-label="Chỉnh sửa">Sửa</button>
+                        <button type="button" class="btn btn-danger btn-sm reg-del-btn" data-action="delete-registration" data-reg-id="${escapeHtml(r.id)}" title="Xóa phiếu này" aria-label="Xóa phiếu này">Xóa</button>
+                    </div>
                 </td>
             </tr>
         `;
@@ -1046,7 +1123,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                                 <th class="col-left">Trình độ (Lv1 → Lv3)</th>
                                 <th style="width:108px;">Thời gian</th>
                                 <th style="width:106px;">Trạng thái</th>
-                                <th style="width:66px;"></th>
+                                <th style="width:124px;">Thao tác</th>
                             </tr>
                         </thead>
                         <tbody>

@@ -15,6 +15,7 @@ import {
     calculatePlayerLeaderboard,
     calculateStandings,
     combineScheduleValue,
+    createRallyLogEntry,
     escapeHtml,
     evaluateSetWinner,
     evaluateSubMatch,
@@ -25,11 +26,13 @@ import {
     normalizeConfig,
     normalizeRallyState,
     normalizeSetPlayerStats,
+    normalizeSetRallyLogs,
     parseScheduleValue,
     resolveSubMatchSchedule,
     sanitizeRegistrationPayload,
     selectRallyRole,
     summarizeRegistrations,
+    summarizeSetRallyLog,
     swapRallyCourtOrder
 } from '../js/tournament-engine.js';
 import { createInitialDemoState } from '../js/demo-data.js';
@@ -40,6 +43,7 @@ import {
     renderRegisterPage,
     renderRulesTab,
     renderStandingsTab,
+    renderSubMatchHistoryModal,
     renderTeamDetailModal,
     renderTeamMatchCard,
     renderTeamsTab,
@@ -47,7 +51,8 @@ import {
 } from '../js/ui-public.js';
 import {
     renderAdminLoginModal,
-    renderAdminTab
+    renderAdminTab,
+    renderEditRegistrationModal
 } from '../js/ui-admin.js';
 
 test('evaluateSetWinner respects win-by-2 and cap rules', () => {
@@ -257,6 +262,34 @@ test('Admin UI renders all 4 subtabs and clean password-only login modal', () =>
         assert.ok(html.includes('Bảng Điều Khiển Admin') || html.includes('Đăng xuất Admin'));
         assert.ok(html.length > 200);
     }
+
+    // Scores subtab distinguishes level tiers (lv-1/lv-2/lv-3) and match states (live / ready / upcoming / completed) and per-set states
+    const scoresMatch = state.teamMatches[1] || state.teamMatches[0];
+    const scoreSubs = state.subMatches.filter((s) => s.team_match_id === scoresMatch.id).sort((a, b) => a.level_index - b.level_index);
+    if (scoreSubs.length >= 3) {
+        scoreSubs[0].status = 'live';
+        scoreSubs[0].sets = [{ a: 11, b: 6 }, { a: 5, b: 4 }, { a: 0, b: 0 }];
+        scoreSubs[1].status = 'upcoming';
+        scoreSubs[1].sets = [{ a: 0, b: 0 }];
+        scoreSubs[1].format_override = { ...(scoreSubs[1].format_override || {}), queueState: 'ready' };
+        scoreSubs[2].status = 'upcoming';
+        scoreSubs[2].sets = [{ a: 0, b: 0 }];
+        scoreSubs[2].format_override = null;
+    }
+    const scoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: scoresMatch.id }, 'supabase');
+    assert.ok(scoresHtml.includes('scorer-sub-card status-live lv-1'));
+    assert.ok(scoresHtml.includes('scorer-sub-card status-ready lv-2'));
+    assert.ok(scoresHtml.includes('scorer-sub-card status-upcoming lv-3'));
+    assert.ok(scoresHtml.includes('set-editor-block set-state-completed'));
+    assert.ok(scoresHtml.includes('set-editor-block set-state-live'));
+    assert.ok(scoresHtml.includes('set-editor-block set-state-waiting'));
+    assert.ok(scoresHtml.includes('level-pill lv-1'));
+    assert.ok(scoresHtml.includes('level-pill lv-2'));
+    assert.ok(scoresHtml.includes('level-pill lv-3'));
+    assert.ok(scoresHtml.includes('ĐANG ĐẤU'));
+    assert.ok(scoresHtml.includes('⏳ SẮP ĐẤU'));
+    assert.ok(stylesCss.includes('body.mobile-header-hidden') === false);
+    assert.ok(stylesCss.includes('.site-header {\n        position: relative;') || stylesCss.includes('.site-header {\r\n        position: relative;'));
 
     const scheduleHtml = renderAdminTab(state, { subtab: 'schedule' }, 'supabase');
     assert.ok(scheduleHtml.includes('id="admin-generate-rr-form"'));
@@ -713,6 +746,20 @@ test('Google-Form-style player registration page and Admin registrations dashboa
     // Row ordering puts Quốc Bảo (Lv1) above Nguyễn Văn Hải (Lv2) above Lê Minh (Lv3)
     assert.ok(adminRegHtml.indexOf('Quốc Bảo') < adminRegHtml.indexOf('Nguyễn Văn Hải'));
     assert.ok(adminRegHtml.indexOf('Nguyễn Văn Hải') < adminRegHtml.indexOf('Minh'));
+    // Approved row renders static approved badge + Edit & Delete buttons (no downgrade toggle back to pending)
+    assert.ok(adminRegHtml.includes('class="tag reg-status-pill-row is-approved">✓ Đã duyệt</span>'));
+    assert.equal(adminRegHtml.includes('data-next-status="pending"'), false);
+    assert.ok(adminRegHtml.includes('data-action="toggle-reg-status"'));
+    assert.ok(adminRegHtml.includes('data-action="edit-registration"'));
+    assert.ok(adminRegHtml.includes('data-action="delete-registration"'));
+
+    // Edit registration modal allows BTC to fix overstated/wrong player level & name
+    const editModalHtml = renderEditRegistrationModal(sampleRegs[2]);
+    assert.ok(editModalHtml.includes('id="admin-edit-registration-form"'));
+    assert.ok(editModalHtml.includes('data-reg-id="reg_top"'));
+    assert.ok(editModalHtml.includes('value="Trần Quốc Bảo"'));
+    assert.ok(editModalHtml.includes('name="skill_level"'));
+    assert.ok(editModalHtml.includes('value="Lv1 - Bậc thầy lão luyện" selected'));
 });
 
 test('Awards visibility supports public, anonymous codenames (no leaks), and hidden modes', () => {
@@ -856,13 +903,24 @@ test('roster player catalog, exclusive select options, duplicate detection, and 
     assert.equal(uniqueValues.size, 4);
     assert.equal(uniqueKeys.size, 4);
 
-    // buildPlayerSelectOptionsHtml excludes otherAssignedKeys, keeps current selection, and groups by level
+    // buildPlayerSelectOptionsHtml strictly shows only players matching targetLevel and excludes otherAssignedKeys
     const otherAssigned = new Set(['cường']);
-    const optHtmlForLv2 = buildPlayerSelectOptionsHtml(catalog, otherAssigned, 'Bình', 2);
-    assert.equal(optHtmlForLv2.includes('>Cường'), false);
-    assert.ok(optHtmlForLv2.includes('value="Bình" selected'));
-    assert.ok(optHtmlForLv2.includes('<optgroup label="Đúng Level 2">'));
-    assert.ok(optHtmlForLv2.includes('<optgroup label="Level khác">'));
+    const optHtmlForLv1 = buildPlayerSelectOptionsHtml(catalog, otherAssigned, '', 1);
+    assert.equal(optHtmlForLv1.includes('value="Cường"'), false);
+    assert.ok(optHtmlForLv1.includes('value="Bình"'));
+    assert.equal(optHtmlForLv1.includes('value="An (Lê)"'), false);
+    assert.equal(optHtmlForLv1.includes('value="An (Nguyễn)"'), false);
+
+    const optHtmlForLv2 = buildPlayerSelectOptionsHtml(catalog, otherAssigned, '', 2);
+    assert.ok(optHtmlForLv2.includes('value="An (Lê)"'));
+    assert.equal(optHtmlForLv2.includes('value="Bình"'), false);
+    assert.equal(optHtmlForLv2.includes('value="An (Nguyễn)"'), false);
+    assert.equal(optHtmlForLv2.includes('Level khác'), false);
+
+    // Pre-selected player whose registered level changed to another tier stays preserved with mismatch warning
+    const mismatchOptHtml = buildPlayerSelectOptionsHtml(catalog, otherAssigned, 'Bình', 2);
+    assert.ok(mismatchOptHtml.includes('value="Bình" selected>Bình (Đang Lv1 — lệch hạng)</option>'));
+    assert.ok(mismatchOptHtml.includes('value="An (Lê)"'));
 
     // Non-registered legacy player name stays selectable with (Ngoài ĐK) badge until changed
     const legacyOptHtml = buildPlayerSelectOptionsHtml(catalog, otherAssigned, 'Minh Khôi', 1);
@@ -909,4 +967,84 @@ test('roster player catalog, exclusive select options, duplicate detection, and 
     const b1Html = html.slice(b1Idx, b1EndIdx);
     assert.equal(b1Html.includes('value="Cường"'), false);
     assert.ok(b1Html.includes('value="Bình"'));
+});
+
+test('persistent per-set rally history log, analytics summary, and play-by-play modal', () => {
+    const state = createInitialDemoState('main');
+    const sm = state.subMatches[0];
+    const tm = state.teamMatches.find((m) => m.id === sm.team_match_id);
+    const pairA = state.teamPairs.find((p) => p.id === sm.pair_a_id);
+    const pairB = state.teamPairs.find((p) => p.id === sm.pair_b_id);
+    const teamsMap = new Map(state.teams.map((t) => [t.id, t]));
+    const pairsMap = new Map(state.teamPairs.map((p) => [p.id, p]));
+
+    let rally = normalizeRallyState(null, pairA, pairB);
+    let score = { a: 0, b: 0 };
+    let statRow = normalizeSetPlayerStats(null, 1)[0];
+    const logs = [];
+
+    const sequence = ['server-ace', 'receiver-error', 'server-out', 'receiver-win'];
+    sequence.forEach((outcome, i) => {
+        const res = applyRallyOutcomeToSet(statRow, score, rally, outcome, pairA, pairB);
+        const entry = createRallyLogEntry({
+            seq: i + 1,
+            rallyBefore: rally,
+            outcome,
+            result: res,
+            scoreBefore: score,
+            pairA,
+            pairB,
+            timestamp: `2026-11-20T09:00:0${i}Z`
+        });
+        assert.ok(entry);
+        logs.push(entry);
+        statRow = res.statRow;
+        score = res.setScore;
+        rally = res.rally;
+    });
+
+    assert.equal(logs.length, 4);
+    assert.equal(logs[0].call, '0-0-1');
+    assert.equal(logs[0].scored, true);
+    assert.equal(logs[0].a, 1);
+    assert.equal(logs[1].call, '1-0-1');
+    assert.equal(logs[1].a, 2);
+    // Rally 3 server-out stays with Side A Serve 2; Rally 4 receiver-win causes Side-Out to Side B!
+    assert.equal(logs[2].sideOut, false);
+    assert.equal(logs[2].nextTurn, 2);
+    assert.equal(logs[3].sideOut, true);
+    assert.equal(logs[3].nextTurn, 1);
+
+    const normalized = normalizeSetRallyLogs([logs, [{ invalid: true }]], 2);
+    assert.equal(normalized[0].length, 4);
+    assert.equal(normalized[1].length, 0);
+
+    const summary = summarizeSetRallyLog(normalized[0]);
+    assert.equal(summary.totalRallies, 4);
+    assert.equal(summary.scoringRallies, 2);
+    assert.equal(summary.sideOuts, 1);
+    assert.equal(summary.maxRunA, 2);
+    assert.equal(summary.largestLeadA, 2);
+    assert.equal(summary.timeline.length, 5);
+
+    sm.sets = [{ a: score.a, b: score.b }];
+    sm.format_override = { ...(sm.format_override || {}), setPlayerStats: [statRow], setRallyLogs: normalized };
+
+    const adminHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: tm.id }, 'supabase');
+    assert.ok(adminHtml.includes(`data-action="view-set-history" data-sub-id="${sm.id}" data-set-idx="0"`));
+    assert.ok(adminHtml.includes('Chi tiết (4)'));
+
+    const publicCardHtml = renderTeamMatchCard(tm, {
+        teamsMap,
+        pairsMap,
+        subMatches: state.subMatches,
+        config: state.tournament.config
+    }, false);
+    assert.ok(publicCardHtml.includes(`data-action="view-set-history" data-sub-id="${sm.id}"`));
+
+    const modalHtml = renderSubMatchHistoryModal(sm.id, state, { setIdx: 0, filter: 'all', sortDesc: false });
+    assert.ok(modalHtml.includes('Chi Tiết Diễn Biến Từng Lượt'));
+    assert.ok(modalHtml.includes('history-svg'));
+    assert.ok(modalHtml.includes('⇄ Đổi giao'));
+    assert.ok(modalHtml.includes('0-0-1'));
 });

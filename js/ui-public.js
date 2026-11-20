@@ -6,13 +6,17 @@ import {
     calculatePlayerLeaderboard,
     calculateStandings,
     escapeHtml,
+    evaluateSubMatch,
     evaluateTeamMatch,
     formatScheduleRaw,
     getSubMatchDisplayOrder,
     getSubMatchStatusRank,
     getTeamMatchCourts,
     normalizeConfig,
-    resolveSubMatchSchedule
+    normalizeSetPlayerStats,
+    normalizeSetRallyLogs,
+    resolveSubMatchSchedule,
+    summarizeSetRallyLog
 } from './tournament-engine.js';
 
 function formatSigned(num) {
@@ -165,10 +169,11 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
         const pairBText = pairB
             ? `${pairB.player_1 || ''}${pairB.player_2 ? ` / ${pairB.player_2}` : ''}`.trim()
             : pairBLabel;
+        const lvlTier = Math.max(1, Math.min(4, Number(sm.level_index) || 1));
 
         if (isSubReady || isSubUpcoming) {
             const stateBadge = isSubReady
-                ? '<span class="ppa-status-pill ready">Sắp đấu</span>'
+                ? '<span class="ppa-status-pill ready">⏳ Sắp đấu</span>'
                 : '<span class="ppa-status-pill upcoming">Chưa đấu</span>';
             const rowA = buildPpaPairRowHtml({
                 sideKey: 'A',
@@ -193,9 +198,9 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
                 hasScoreGrid: false
             });
             return `
-                <div class="ppa-sub-card ${isSubReady ? 'is-ready' : 'is-upcoming'}">
+                <div class="ppa-sub-card ${isSubReady ? 'is-ready' : 'is-upcoming'} lv-${lvlTier}">
                     <div class="ppa-sub-head">
-                        <span class="ppa-sub-division">${escapeHtml(levelLabel)} · Mixed Doubles</span>
+                        <span class="ppa-sub-division"><span class="ppa-level-chip lv-${lvlTier}">${escapeHtml(levelLabel)}</span> · Mixed Doubles</span>
                         <div class="ppa-sub-meta">
                             ${subSchedulePillHtml}
                             <span class="ppa-bo-tag">${boLabel}</span>
@@ -212,10 +217,25 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
 
         const sets = ev.sets || [];
         const setCount = Math.max(ev.effectiveConfig.bestOf || 1, sets.length);
-        const setHeadersHtml = Array.from({ length: setCount }, (_, i) => `<div class="ppa-col-th">Set ${i + 1}</div>`).join('');
+        const firstLiveSetIdx = isSubLive ? sets.findIndex((s) => !s?.winner) : -1;
+        const setHeadersHtml = Array.from({ length: setCount }, (_, i) => {
+            const setObj = sets[i];
+            const cls = setObj?.winner
+                ? 'is-done'
+                : (isSubLive && i === firstLiveSetIdx ? 'is-live' : 'is-wait');
+            return `<div class="ppa-col-th ${cls}">Set ${i + 1}</div>`;
+        }).join('');
         const statusBadge = isSubLive
             ? '<span class="ppa-status-pill live"><span class="pulse-dot"></span>LIVE</span>'
             : '<span class="ppa-status-pill final">FINAL</span>';
+
+        const rallyLogs = normalizeSetRallyLogs(sm.format_override?.setRallyLogs, Math.max(1, sets.length));
+        const totalLogs = rallyLogs.reduce((sum, arr) => sum + arr.length, 0);
+        const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, Math.max(1, sets.length));
+        const hasRecordedStats = setStats.some((row) => ['a1', 'a2', 'b1', 'b2'].some((k) => row[k].points > 0 || row[k].errors > 0));
+        const detailBtnHtml = (totalLogs > 0 || hasRecordedStats)
+            ? `<button type="button" class="ppa-detail-btn" data-action="view-set-history" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="0" title="Xem chi tiết diễn biến từng lượt thi đấu">Chi tiết${totalLogs > 0 ? ` (${totalLogs})` : ''}</button>`
+            : '';
 
         const rowA = buildPpaPairRowHtml({
             sideKey: 'A',
@@ -241,13 +261,14 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
         });
 
         return `
-            <div class="ppa-sub-card ${isSubLive ? 'is-live' : ''} ${isSubCompleted ? 'is-completed' : ''}">
+            <div class="ppa-sub-card ${isSubLive ? 'is-live' : ''} ${isSubCompleted ? 'is-completed' : ''} lv-${lvlTier}">
                 <div class="ppa-sub-head">
-                    <span class="ppa-sub-division">${escapeHtml(levelLabel)} · Mixed Doubles</span>
+                    <span class="ppa-sub-division"><span class="ppa-level-chip lv-${lvlTier}">${escapeHtml(levelLabel)}</span> · Mixed Doubles</span>
                     <div class="ppa-sub-meta">
                         ${subSchedulePillHtml}
                         <span class="ppa-bo-tag">${boLabel}</span>
                         ${statusBadge}
+                        ${detailBtnHtml}
                     </div>
                 </div>
                 <div class="ppa-grid-head" style="--sets:${setCount};">
@@ -1342,6 +1363,297 @@ export function renderTeamDetailModal(teamId, state) {
                     <h4 style="margin:0 0 6px;font-size:12.5px;text-transform:uppercase;letter-spacing:0.8px;color:var(--accent);">Lịch sử &amp; Lịch đối đầu</h4>
                     <div>
                         ${matchesHtml || '<div class="section-sub">Chưa có trận đấu.</div>'}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function formatRallyClock(isoStr) {
+    if (!isoStr) return '';
+    try {
+        return new Date(isoStr).toLocaleTimeString('vi-VN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
+    } catch {
+        return '';
+    }
+}
+
+function buildSetScoreTimelineSvg(timeline, { colorA, colorB, labelA, labelB, targetPts }) {
+    if (!Array.isArray(timeline) || timeline.length <= 1) return '';
+    const w = 360;
+    const h = 114;
+    const padL = 26;
+    const padR = 10;
+    const padT = 12;
+    const padB = 18;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+    const maxScoreInLog = timeline.reduce((mx, pt) => Math.max(mx, pt.a, pt.b), 0);
+    const maxY = Math.max(Number(targetPts) || 11, maxScoreInLog + 1, 5);
+    const maxN = Math.max(1, timeline.length - 1);
+
+    const toX = (idx) => (padL + (idx / maxN) * plotW).toFixed(1);
+    const toY = (val) => (padT + plotH - (Math.min(maxY, Math.max(0, val)) / maxY) * plotH).toFixed(1);
+
+    const ptsA = timeline.map((pt, i) => `${toX(i)},${toY(pt.a)}`).join(' ');
+    const ptsB = timeline.map((pt, i) => `${toX(i)},${toY(pt.b)}`).join(' ');
+    const last = timeline[timeline.length - 1];
+    const targetY = targetPts > 0 && targetPts <= maxY ? toY(targetPts) : null;
+
+    return `
+        <div class="history-chart-card">
+            <div class="history-chart-head">
+                <span>Tiến trình điểm số</span>
+                <div class="history-chart-legend">
+                    <span><i style="background:${escapeHtml(colorA)}"></i>${escapeHtml(labelA)} (${last.a})</span>
+                    <span><i style="background:${escapeHtml(colorB)}"></i>${escapeHtml(labelB)} (${last.b})</span>
+                </div>
+            </div>
+            <svg viewBox="0 0 ${w} ${h}" class="history-svg" role="img" aria-label="Biểu đồ tiến trình điểm">
+                <line x1="${padL}" y1="${padT + plotH}" x2="${w - padR}" y2="${padT + plotH}" stroke="#d5e2dc" stroke-width="1" />
+                <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="#d5e2dc" stroke-width="1" />
+                ${targetY ? `<line x1="${padL}" y1="${targetY}" x2="${w - padR}" y2="${targetY}" stroke="#cbd5e1" stroke-dasharray="3 3" stroke-width="1" />` : ''}
+                ${targetY ? `<text x="4" y="${Number(targetY) + 3}" font-size="9" fill="#64748b" font-weight="700">${targetPts}</text>` : ''}
+                <text x="8" y="${padT + plotH}" font-size="9" fill="#94a3b8" font-weight="700">0</text>
+                <text x="${w - padR}" y="${h - 4}" text-anchor="end" font-size="9" fill="#94a3b8" font-weight="600">${maxN} lượt</text>
+                <polyline fill="none" stroke="${escapeHtml(colorA)}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" points="${ptsA}" />
+                <polyline fill="none" stroke="${escapeHtml(colorB)}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" points="${ptsB}" />
+                <circle cx="${toX(timeline.length - 1)}" cy="${toY(last.a)}" r="3.4" fill="${escapeHtml(colorA)}" />
+                <circle cx="${toX(timeline.length - 1)}" cy="${toY(last.b)}" r="3.4" fill="${escapeHtml(colorB)}" />
+            </svg>
+        </div>
+    `;
+}
+
+export function renderSubMatchHistoryModal(subId, state, options = {}) {
+    const config = normalizeConfig(state?.tournament?.config);
+    const sm = (state?.subMatches || []).find((x) => x.id === subId);
+    if (!sm) return '';
+
+    const tm = (state?.teamMatches || []).find((x) => x.id === sm.team_match_id);
+    const teamsMap = new Map((state?.teams || []).map((t) => [t.id, t]));
+    const pairsMap = new Map((state?.teamPairs || []).map((p) => [p.id, p]));
+    const teamA = tm ? teamsMap.get(tm.team_a_id) : null;
+    const teamB = tm ? teamsMap.get(tm.team_b_id) : null;
+    const pairA = sm.pair_a_id ? pairsMap.get(sm.pair_a_id) : null;
+    const pairB = sm.pair_b_id ? pairsMap.get(sm.pair_b_id) : null;
+
+    const ev = evaluateSubMatch(sm, config);
+    const sets = Array.isArray(sm.sets) && sm.sets.length > 0 ? sm.sets : [{ a: 0, b: 0 }];
+    const curSetIdx = Math.max(0, Math.min(sets.length - 1, Number(options.setIdx) || 0));
+    const filterMode = options.filter === 'scored' ? 'scored' : 'all';
+    const sortDesc = Boolean(options.sortDesc);
+
+    const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+    const setLogsAll = normalizeSetRallyLogs(sm.format_override?.setRallyLogs, sets.length);
+    const activeSetScore = sets[curSetIdx] || { a: 0, b: 0 };
+    const activeSetEval = ev.sets[curSetIdx] || {};
+    const activeStats = setStats[curSetIdx] || {};
+    const activeLogs = setLogsAll[curSetIdx] || [];
+    const summary = summarizeSetRallyLog(activeLogs);
+
+    const levelName = config.levelNames[sm.level_index - 1] || `Level ${sm.level_index}`;
+    const pairACode = pairA?.pair_label || `${teamA?.code || 'A'}${sm.level_index}`;
+    const pairBCode = pairB?.pair_label || `${teamB?.code || 'B'}${sm.level_index}`;
+    const pairANames = pairA ? `${pairA.player_1 || ''}${pairA.player_2 ? ` / ${pairA.player_2}` : ''}`.trim() : pairACode;
+    const pairBNames = pairB ? `${pairB.player_1 || ''}${pairB.player_2 ? ` / ${pairB.player_2}` : ''}`.trim() : pairBCode;
+    const colorA = teamA?.color || '#2563EB';
+    const colorB = teamB?.color || '#E05328';
+
+    const playerNameBySlot = new Map([
+        ['a1', pairA?.player_1 || `${pairACode} · VĐV 1`],
+        ['a2', pairA?.player_2 || `${pairACode} · VĐV 2`],
+        ['b1', pairB?.player_1 || `${pairBCode} · VĐV 1`],
+        ['b2', pairB?.player_2 || `${pairBCode} · VĐV 2`]
+    ]);
+
+    const setTabsHtml = sets.map((s, idx) => {
+        const count = (setLogsAll[idx] || []).length;
+        const winCls = ev.sets[idx]?.winner ? 'has-winner' : '';
+        return `
+            <button type="button" class="history-set-tab ${idx === curSetIdx ? 'active' : ''} ${winCls}" data-action="switch-history-set" data-set-idx="${idx}">
+                Set ${idx + 1} <span class="tabular">(${Number(s.a) || 0}–${Number(s.b) || 0})</span>${count > 0 ? `<small>${count}</small>` : ''}
+            </button>
+        `;
+    }).join('');
+
+    const playerRowsMeta = [
+        ...(pairA?.player_1 || activeStats.a1?.points || activeStats.a1?.errors ? [{ slot: 'a1', side: 'A', pair: pairACode, color: colorA }] : []),
+        ...(pairA?.player_2 || activeStats.a2?.points || activeStats.a2?.errors ? [{ slot: 'a2', side: 'A', pair: pairACode, color: colorA }] : []),
+        ...(pairB?.player_1 || activeStats.b1?.points || activeStats.b1?.errors ? [{ slot: 'b1', side: 'B', pair: pairBCode, color: colorB }] : []),
+        ...(pairB?.player_2 || activeStats.b2?.points || activeStats.b2?.errors ? [{ slot: 'b2', side: 'B', pair: pairBCode, color: colorB }] : [])
+    ];
+
+    const boxScoreHtml = playerRowsMeta.map((m) => {
+        const st = activeStats[m.slot] || { points: 0, errors: 0 };
+        const name = playerNameBySlot.get(m.slot) || m.slot;
+        return `
+            <div class="history-box-player">
+                <div class="history-box-name">
+                    <span class="history-dot" style="background:${escapeHtml(m.color)}"></span>
+                    <strong>${escapeHtml(name)}</strong>
+                    <span class="history-pair-tag">${escapeHtml(m.pair)}</span>
+                </div>
+                <div class="history-box-metrics tabular">
+                    <span class="history-metric pts">+${st.points} điểm</span>
+                    <span class="history-metric err">${st.errors} lỗi</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    const chartHtml = buildSetScoreTimelineSvg(summary.timeline, {
+        colorA,
+        colorB,
+        labelA: pairACode,
+        labelB: pairBCode,
+        targetPts: ev.effectiveConfig.pointsPerSet || 11
+    });
+
+    const filteredLogs = filterMode === 'scored' ? activeLogs.filter((e) => e.scored) : activeLogs;
+    const orderedLogs = sortDesc ? [...filteredLogs].reverse() : filteredLogs;
+
+    const rallyRowsHtml = orderedLogs.map((e) => {
+        const sName = playerNameBySlot.get(e.sSlot) || e.sSlot;
+        const rName = playerNameBySlot.get(e.rSlot) || e.rSlot;
+        const sPair = e.sSide === 'a' ? pairACode : pairBCode;
+        const sColor = e.sSide === 'a' ? colorA : colorB;
+        const sCourt = e.sPos === 1 ? 'Phải' : 'Trái';
+        const rCourt = e.rPos === 1 ? 'Phải' : 'Trái';
+        const clock = formatRallyClock(e.ts);
+
+        let badgeCls = 'is-point';
+        let badgeTxt = '+1 Điểm';
+        let actionDesc = `${sName} tấn công chính xác`;
+        let shiftHtml = '';
+
+        if (e.outcome === 'receiver-error') {
+            actionDesc = `${rName} đỡ hỏng`;
+        } else if (e.outcome === 'server-out') {
+            badgeCls = 'is-fault';
+            badgeTxt = 'Mất lượt';
+            actionDesc = `${sName} phát hỏng / Out`;
+            shiftHtml = e.sideOut
+                ? '<span class="history-shift-pill is-sideout">⇄ Đổi giao</span>'
+                : `<span class="history-shift-pill">→ Phát ${e.nextTurn}</span>`;
+        } else if (e.outcome === 'receiver-win') {
+            badgeCls = 'is-recv';
+            badgeTxt = 'Đoạt giao';
+            actionDesc = `${rName} phòng thủ (+1đ CN)`;
+            shiftHtml = e.sideOut
+                ? '<span class="history-shift-pill is-sideout">⇄ Đổi giao</span>'
+                : `<span class="history-shift-pill">→ Phát ${e.nextTurn}</span>`;
+        }
+
+        const scoreACls = e.scored && e.sSide === 'a' ? 'is-scored' : '';
+        const scoreBCls = e.scored && e.sSide === 'b' ? 'is-scored' : '';
+
+        return `
+            <div class="history-rally-item ${e.sideOut ? 'has-sideout' : ''}">
+                <div class="history-rally-left">
+                    <span class="history-turn-num tabular">#${e.n}</span>
+                    ${e.call ? `<span class="history-call-pill tabular">${escapeHtml(e.call)}</span>` : ''}
+                    ${clock ? `<span class="history-clock tabular">${escapeHtml(clock)}</span>` : ''}
+                </div>
+                <div class="history-rally-body">
+                    <div class="history-rally-matchup">
+                        <span class="history-pair-dot" style="background:${escapeHtml(sColor)}"></span>
+                        <strong>${escapeHtml(sPair)} · ${escapeHtml(sName)}</strong>
+                        <span class="history-pos-chip">#${e.sPos} ${sCourt} · Phát ${e.turn}</span>
+                        <span class="history-arrow">→</span>
+                        <span>${escapeHtml(rName)}</span>
+                        <span class="history-pos-chip">#${e.rPos} ${rCourt}</span>
+                    </div>
+                    <div class="history-rally-outcome">
+                        <span class="history-out-badge ${badgeCls}">${badgeTxt}</span>
+                        <span class="history-out-desc">${escapeHtml(actionDesc)}</span>
+                        ${shiftHtml}
+                    </div>
+                </div>
+                <div class="history-rally-score tabular">
+                    <span class="${scoreACls}">${e.a}</span>
+                    <span>:</span>
+                    <span class="${scoreBCls}">${e.b}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    const winLabel = activeSetEval.winner === 'A'
+        ? `<span class="tag tag-status-completed">🏆 ${escapeHtml(pairACode)} thắng Set ${curSetIdx + 1}</span>`
+        : (activeSetEval.winner === 'B'
+            ? `<span class="tag tag-status-completed">🏆 ${escapeHtml(pairBCode)} thắng Set ${curSetIdx + 1}</span>`
+            : `<span class="tag tag-round">Set ${curSetIdx + 1}</span>`);
+
+    const subHeaderMeta = [tm?.round_name, levelName, tm?.court].filter(Boolean).join(' · ');
+
+    return `
+        <div class="modal-backdrop" data-action="close-modal">
+            <div class="modal-card wide history-modal-card">
+                <div class="modal-header history-modal-header">
+                    <div style="min-width:0;">
+                        <h3 class="modal-title">Chi Tiết Diễn Biến Từng Lượt</h3>
+                        <div class="section-sub">${escapeHtml(subHeaderMeta)}</div>
+                    </div>
+                    <button type="button" class="modal-close" data-action="close-modal" aria-label="Đóng">✕</button>
+                </div>
+                <div class="modal-body history-modal-body">
+                    <div class="history-set-tabs" role="tablist">
+                        ${setTabsHtml}
+                    </div>
+
+                    <div class="history-hero-card">
+                        <div class="history-hero-side">
+                            <span class="history-hero-code" style="color:${escapeHtml(colorA)}">${escapeHtml(pairACode)}</span>
+                            <strong class="history-hero-names">${escapeHtml(pairANames)}</strong>
+                        </div>
+                        <div class="history-hero-center">
+                            <div class="history-hero-score tabular">${Number(activeSetScore.a) || 0} : ${Number(activeSetScore.b) || 0}</div>
+                            ${winLabel}
+                        </div>
+                        <div class="history-hero-side right">
+                            <span class="history-hero-code" style="color:${escapeHtml(colorB)}">${escapeHtml(pairBCode)}</span>
+                            <strong class="history-hero-names">${escapeHtml(pairBNames)}</strong>
+                        </div>
+                    </div>
+
+                    ${activeLogs.length > 0 ? `
+                        <div class="history-kpi-grid">
+                            <div class="history-kpi-cell"><span>Lượt bóng</span><strong class="tabular">${summary.totalRallies}</strong></div>
+                            <div class="history-kpi-cell"><span>Đổi giao</span><strong class="tabular">${summary.sideOuts}</strong></div>
+                            <div class="history-kpi-cell"><span>Chuỗi ${escapeHtml(pairACode)}</span><strong class="tabular" style="color:${escapeHtml(colorA)};">+${summary.maxRunA}</strong></div>
+                            <div class="history-kpi-cell"><span>Chuỗi ${escapeHtml(pairBCode)}</span><strong class="tabular" style="color:${escapeHtml(colorB)};">+${summary.maxRunB}</strong></div>
+                        </div>
+                        ${chartHtml}
+                    ` : ''}
+
+                    ${boxScoreHtml ? `
+                        <div class="history-box-section">
+                            <div class="history-section-label">Thống kê cá nhân Set ${curSetIdx + 1}</div>
+                            <div class="history-box-grid">${boxScoreHtml}</div>
+                        </div>
+                    ` : ''}
+
+                    <div class="history-feed-section">
+                        <div class="history-feed-head">
+                            <span class="history-section-label">Nhật ký từng pha bóng</span>
+                            ${activeLogs.length > 0 ? `
+                                <div class="history-feed-controls">
+                                    <button type="button" class="history-ctrl-btn ${filterMode === 'all' ? 'active' : ''}" data-action="history-filter" data-filter="all">Tất cả (${activeLogs.length})</button>
+                                    <button type="button" class="history-ctrl-btn ${filterMode === 'scored' ? 'active' : ''}" data-action="history-filter" data-filter="scored">Ghi điểm (${summary.scoringRallies})</button>
+                                    <button type="button" class="history-ctrl-btn" data-action="history-sort">${sortDesc ? 'Mới nhất ↑' : 'Từ đầu ↓'}</button>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <div class="history-rally-list">
+                            ${rallyRowsHtml || '<div class="history-empty">Chưa có nhật ký từng pha bóng cho Set này. Khi Admin bấm các nút kết quả pha bóng (Tấn công chính xác / Đỡ hỏng / Phát hỏng / Phòng thủ thành công), hệ thống sẽ tự động lưu chi tiết từng lượt tại đây.</div>'}
+                        </div>
                     </div>
                 </div>
             </div>

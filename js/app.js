@@ -7,6 +7,7 @@ import {
     buildResizedRoster,
     calculateStandings,
     combineScheduleValue,
+    createRallyLogEntry,
     escapeHtml,
     evaluateSubMatch,
     evaluateTeamMatch,
@@ -17,14 +18,17 @@ import {
     normalizeConfig,
     normalizeRallyState,
     normalizeSetPlayerStats,
+    normalizeSetRallyLogs,
     normalizeSkillLevel,
+    sanitizeRegistrationPayload,
     selectRallyRole,
     swapRallyCourtOrder
 } from './tournament-engine.js';
 import {
     REGISTRATION_TABLE_SQL,
     renderAdminLoginModal,
-    renderAdminTab
+    renderAdminTab,
+    renderEditRegistrationModal
 } from './ui-admin.js';
 import {
     renderAwardsTab,
@@ -33,6 +37,7 @@ import {
     renderRegisterPage,
     renderRulesTab,
     renderStandingsTab,
+    renderSubMatchHistoryModal,
     renderTeamDetailModal,
     renderTeamsTab,
     renderTvModeView
@@ -90,39 +95,15 @@ const appState = {
 const pendingSubSaves = new Map();
 const activeSavePromises = new Map();
 let deferredRender = false;
-let lastWindowScrollY = 0;
-let scrollTicking = false;
 
 function syncMobileHeaderHeight() {
     if (typeof document === 'undefined' || typeof window === 'undefined') return;
     const navEl = document.getElementById('nav-root');
     if (navEl && !navEl.classList.contains('hidden')) {
-        const h = navEl.offsetHeight || 70;
+        const h = window.innerWidth <= 900 ? 0 : (navEl.offsetHeight || 70);
         document.documentElement.style.setProperty('--site-header-h', `${h}px`);
     }
-    if (window.innerWidth > 900 || window.scrollY <= 36) {
-        document.body.classList.remove('mobile-header-hidden');
-    }
-}
-
-function handleWindowScroll() {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    const currentY = Math.max(0, window.scrollY || window.pageYOffset || 0);
-    if (window.innerWidth > 900 || appState.tvMode) {
-        document.body.classList.remove('mobile-header-hidden');
-        lastWindowScrollY = currentY;
-        return;
-    }
-
-    const delta = currentY - lastWindowScrollY;
-    if (currentY <= 36) {
-        document.body.classList.remove('mobile-header-hidden');
-    } else if (delta > 6 && currentY > 72) {
-        document.body.classList.add('mobile-header-hidden');
-    } else if (delta < -6) {
-        document.body.classList.remove('mobile-header-hidden');
-    }
-    lastWindowScrollY = currentY;
+    document.body.classList.remove('mobile-header-hidden');
 }
 
 function isRegisterPageMode() {
@@ -594,6 +575,19 @@ function renderModal() {
         return;
     }
 
+    if (appState.modal.type === 'set-history') {
+        modalRoot.innerHTML = renderSubMatchHistoryModal(appState.modal.subId, appState.data, appState.modal);
+        return;
+    }
+
+    if (appState.modal.type === 'edit-registration') {
+        const reg = (appState.adminState.registrations || []).find((r) => r.id === appState.modal.regId);
+        modalRoot.innerHTML = renderEditRegistrationModal(reg);
+        const nameInput = document.getElementById('edit-reg-fullname');
+        if (nameInput) nameInput.focus();
+        return;
+    }
+
     if (appState.modal.type === 'setup-help') {
         modalRoot.innerHTML = `
             <div class="modal-backdrop" data-action="close-modal">
@@ -817,7 +811,7 @@ function cloneStatRow(row) {
     };
 }
 
-function pushRallyUndoSnapshot(subId, setIdx, statsRow, setsRow, rallyState) {
+function pushRallyUndoSnapshot(subId, setIdx, statsRow, setsRow, rallyState, rallyLogsArr = []) {
     if (!appState.adminState.rallyUndoBySet) appState.adminState.rallyUndoBySet = {};
     const key = `${subId}:${setIdx}`;
     const stack = Array.isArray(appState.adminState.rallyUndoBySet[key])
@@ -826,17 +820,21 @@ function pushRallyUndoSnapshot(subId, setIdx, statsRow, setsRow, rallyState) {
     stack.push({
         statRow: cloneStatRow(statsRow),
         setScore: { a: Number(setsRow?.a) || 0, b: Number(setsRow?.b) || 0 },
-        rally: { ...rallyState }
+        rally: { ...rallyState },
+        prevLogs: Array.isArray(rallyLogsArr) ? [...rallyLogsArr] : []
     });
     if (stack.length > 50) stack.shift();
     appState.adminState.rallyUndoBySet[key] = stack;
 }
 
-function commitSetStatsAndScore(sm, setIdx, setStats, sets) {
+function commitSetStatsAndScore(sm, setIdx, setStats, sets, setRallyLogs = null) {
     const nextOverride = (sm.format_override && typeof sm.format_override === 'object')
         ? { ...sm.format_override }
         : {};
     nextOverride.setPlayerStats = setStats;
+    if (Array.isArray(setRallyLogs)) {
+        nextOverride.setRallyLogs = setRallyLogs;
+    }
     sm.format_override = nextOverride;
     sm.sets = sets;
     syncSubMatchLifecycle(sm);
@@ -855,14 +853,30 @@ function applyRallyOutcome(subId, setIdx, outcome) {
     const { pairA, pairB } = getSubMatchPairObjects(sm);
     const rally = getSetRallyState(subId, setIdx, pairA, pairB);
     const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+    const setRallyLogs = normalizeSetRallyLogs(sm.format_override?.setRallyLogs, sets.length);
     const result = applyRallyOutcomeToSet(setStats[setIdx], sets[setIdx], rally, outcome, pairA, pairB);
     if (!result) return;
 
-    pushRallyUndoSnapshot(subId, setIdx, setStats[setIdx], sets[setIdx], rally);
+    pushRallyUndoSnapshot(subId, setIdx, setStats[setIdx], sets[setIdx], rally, setRallyLogs[setIdx]);
+
+    const logEntry = createRallyLogEntry({
+        seq: setRallyLogs[setIdx].length + 1,
+        rallyBefore: rally,
+        outcome,
+        result,
+        scoreBefore: sets[setIdx],
+        pairA,
+        pairB,
+        timestamp: new Date().toISOString()
+    });
+    if (logEntry) {
+        setRallyLogs[setIdx] = [...setRallyLogs[setIdx], logEntry];
+    }
+
     setStats[setIdx] = result.statRow;
     sets[setIdx] = result.setScore;
     setSetRallyState(subId, setIdx, result.rally);
-    commitSetStatsAndScore(sm, setIdx, setStats, sets);
+    commitSetStatsAndScore(sm, setIdx, setStats, sets, setRallyLogs);
 }
 
 function resetSetStats(subId, setIdx) {
@@ -876,8 +890,9 @@ function resetSetStats(subId, setIdx) {
     const { pairA, pairB } = getSubMatchPairObjects(sm);
     const rally = getSetRallyState(subId, setIdx, pairA, pairB);
     const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+    const setRallyLogs = normalizeSetRallyLogs(sm.format_override?.setRallyLogs, sets.length);
 
-    pushRallyUndoSnapshot(subId, setIdx, setStats[setIdx], sets[setIdx], rally);
+    pushRallyUndoSnapshot(subId, setIdx, setStats[setIdx], sets[setIdx], rally, setRallyLogs[setIdx]);
 
     setStats[setIdx] = {
         a1: { points: 0, errors: 0 },
@@ -885,9 +900,10 @@ function resetSetStats(subId, setIdx) {
         b1: { points: 0, errors: 0 },
         b2: { points: 0, errors: 0 }
     };
+    setRallyLogs[setIdx] = [];
     sets[setIdx] = { a: 0, b: 0 };
     setSetRallyState(subId, setIdx, normalizeRallyState(null, pairA, pairB));
-    commitSetStatsAndScore(sm, setIdx, setStats, sets);
+    commitSetStatsAndScore(sm, setIdx, setStats, sets, setRallyLogs);
 }
 
 function undoLastRallyOutcome(subId, setIdx) {
@@ -904,12 +920,18 @@ function undoLastRallyOutcome(subId, setIdx) {
 
     const snap = stack.pop();
     const setStats = normalizeSetPlayerStats(sm.format_override?.setPlayerStats, sets.length);
+    const setRallyLogs = normalizeSetRallyLogs(sm.format_override?.setRallyLogs, sets.length);
     setStats[setIdx] = cloneStatRow(snap.statRow);
     sets[setIdx] = { a: Number(snap.setScore.a) || 0, b: Number(snap.setScore.b) || 0 };
+    if (Array.isArray(snap.prevLogs)) {
+        setRallyLogs[setIdx] = [...snap.prevLogs];
+    } else if (setRallyLogs[setIdx].length > 0) {
+        setRallyLogs[setIdx] = setRallyLogs[setIdx].slice(0, -1);
+    }
 
     const { pairA, pairB } = getSubMatchPairObjects(sm);
     setSetRallyState(subId, setIdx, normalizeRallyState(snap.rally, pairA, pairB));
-    commitSetStatsAndScore(sm, setIdx, setStats, sets);
+    commitSetStatsAndScore(sm, setIdx, setStats, sets, setRallyLogs);
 }
 
 async function handleAction(action, el, event) {
@@ -1134,6 +1156,16 @@ async function handleAction(action, el, event) {
         return;
     }
 
+    if (action === 'edit-registration') {
+        if (!appState.isAdmin) return;
+        const regId = el.dataset.regId;
+        const reg = (appState.adminState.registrations || []).find((r) => r.id === regId);
+        if (!reg) return;
+        appState.modal = { type: 'edit-registration', regId };
+        renderModal();
+        return;
+    }
+
     if (action === 'delete-registration') {
         if (!appState.isAdmin) return;
         const regId = el.dataset.regId;
@@ -1245,6 +1277,36 @@ async function handleAction(action, el, event) {
         return;
     }
 
+    if (action === 'view-set-history') {
+        appState.modal = {
+            type: 'set-history',
+            subId: el.dataset.subId,
+            setIdx: Math.max(0, Number(el.dataset.setIdx) || 0),
+            filter: 'all',
+            sortDesc: false
+        };
+        renderModal();
+        return;
+    }
+
+    if (action === 'switch-history-set' && appState.modal?.type === 'set-history') {
+        appState.modal.setIdx = Math.max(0, Number(el.dataset.setIdx) || 0);
+        renderModal();
+        return;
+    }
+
+    if (action === 'history-filter' && appState.modal?.type === 'set-history') {
+        appState.modal.filter = el.dataset.filter === 'scored' ? 'scored' : 'all';
+        renderModal();
+        return;
+    }
+
+    if (action === 'history-sort' && appState.modal?.type === 'set-history') {
+        appState.modal.sortDesc = !appState.modal.sortDesc;
+        renderModal();
+        return;
+    }
+
     if (action === 'rally-outcome') {
         if (!appState.isAdmin) return;
         applyRallyOutcome(el.dataset.subId, Number(el.dataset.setIdx), el.dataset.outcome);
@@ -1284,6 +1346,9 @@ async function handleAction(action, el, event) {
         sm.sets = sm.sets.filter((_, idx) => idx !== setIdx);
         if (Array.isArray(sm.format_override?.setPlayerStats)) {
             sm.format_override.setPlayerStats = sm.format_override.setPlayerStats.filter((_, idx) => idx !== setIdx);
+        }
+        if (Array.isArray(sm.format_override?.setRallyLogs)) {
+            sm.format_override.setRallyLogs = sm.format_override.setRallyLogs.filter((_, idx) => idx !== setIdx);
         }
         for (const bag of [appState.adminState.rallyBySet, appState.adminState.rallyUndoBySet]) {
             if (!bag) continue;
@@ -1611,6 +1676,36 @@ document.addEventListener('submit', async (event) => {
         return;
     }
 
+    if (form.id === 'admin-edit-registration-form') {
+        const regId = form.dataset.regId;
+        const fd = new FormData(form);
+        try {
+            const clean = sanitizeRegistrationPayload({
+                full_name: fd.get('full_name'),
+                display_name: fd.get('display_name'),
+                skill_level: fd.get('skill_level')
+            });
+            const nextStatus = fd.get('status') === 'pending' ? 'pending' : 'approved';
+            setSaveStatus('Đang lưu...');
+            const res = await store.updateRegistration(regId, {
+                full_name: clean.full_name,
+                display_name: clean.display_name,
+                skill_level: clean.skill_level,
+                status: nextStatus
+            });
+            appState.adminState.registrations = res?.rows || [];
+            appState.modal = null;
+            renderModal();
+            setSaveStatus('Đã lưu ✓');
+            showToast('Đã cập nhật thông tin & trình độ VĐV.');
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi!', true);
+            showToast(err.message || 'Không thể cập nhật thông tin.', true);
+        }
+        return;
+    }
+
     if (form.id === 'admin-match-meta-form') {
         const matchId = form.dataset.matchId;
         const fd = new FormData(form);
@@ -1841,15 +1936,6 @@ document.addEventListener('keydown', (event) => {
 });
 
 if (typeof window !== 'undefined') {
-    window.addEventListener('scroll', () => {
-        if (scrollTicking) return;
-        scrollTicking = true;
-        window.requestAnimationFrame(() => {
-            scrollTicking = false;
-            handleWindowScroll();
-        });
-    }, { passive: true });
-
     window.addEventListener('resize', () => {
         syncMobileHeaderHeight();
     }, { passive: true });

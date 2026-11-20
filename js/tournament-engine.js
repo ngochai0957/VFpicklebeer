@@ -971,32 +971,41 @@ export function buildRegisteredPlayerCatalog(registrations = []) {
 }
 
 /**
- * Builds `<option>` markup for a roster slot while excluding players already chosen in other slots.
+ * Builds `<option>` markup for a roster slot matched to its bracket level while excluding players already chosen in other slots.
  */
 export function buildPlayerSelectOptionsHtml(catalog = [], otherAssignedKeys = new Set(), currentValue = '', targetLevel = 1) {
     const curVal = String(currentValue || '').trim();
     const curKey = curVal.toLowerCase();
     const list = Array.isArray(catalog) ? catalog : [];
-    const inCatalog = Boolean(curKey && list.some((p) => p.key === curKey));
+    const strictLevelMatch = targetLevel >= 1 && targetLevel <= SKILL_LEVEL_OPTIONS.length;
 
-    const available = list.filter((p) => p.key === curKey || !otherAssignedKeys.has(p.key));
-    const matched = available.filter((p) => p.levelIndex === targetLevel);
-    const others = available.filter((p) => p.levelIndex !== targetLevel);
+    const levelPool = strictLevelMatch
+        ? list.filter((p) => p.levelIndex === targetLevel)
+        : list;
+    const available = levelPool.filter((p) => p.key === curKey || !otherAssignedKeys.has(p.key));
+    const existingEntry = curKey ? list.find((p) => p.key === curKey) : null;
+    const inLevelPool = Boolean(existingEntry && (!strictLevelMatch || existingEntry.levelIndex === targetLevel));
 
     const renderOpt = (p) => `<option value="${escapeHtml(p.value)}" ${p.key === curKey ? 'selected' : ''}>${escapeHtml(p.label)}</option>`;
 
     let optionsBody = `<option value="" ${!curVal ? 'selected' : ''}>— Chọn VĐV —</option>`;
-    if (curVal && !inCatalog) {
-        optionsBody += `<option value="${escapeHtml(curVal)}" selected>${escapeHtml(curVal)} (Ngoài ĐK)</option>`;
+    if (curVal && !inLevelPool) {
+        if (existingEntry) {
+            const curLvlTag = existingEntry.levelIndex <= SKILL_LEVEL_OPTIONS.length ? `Lv${existingEntry.levelIndex}` : 'Chưa rõ';
+            optionsBody += `<option value="${escapeHtml(curVal)}" selected>${escapeHtml(curVal)} (Đang ${curLvlTag} — lệch hạng)</option>`;
+        } else {
+            optionsBody += `<option value="${escapeHtml(curVal)}" selected>${escapeHtml(curVal)} (Ngoài ĐK)</option>`;
+        }
     }
 
-    if (matched.length > 0 && others.length > 0) {
-        optionsBody += `<optgroup label="Đúng Level ${targetLevel}">${matched.map(renderOpt).join('')}</optgroup>`;
-        optionsBody += `<optgroup label="Level khác">${others.map(renderOpt).join('')}</optgroup>`;
-    } else if (available.length > 0) {
+    if (available.length > 0) {
         optionsBody += available.map(renderOpt).join('');
     } else if (list.length === 0) {
         optionsBody += '<option value="" disabled>Chưa có VĐV trong Đăng Ký</option>';
+    } else if (strictLevelMatch && levelPool.length === 0) {
+        optionsBody += `<option value="" disabled>Chưa có VĐV Level ${targetLevel} trong ĐK</option>`;
+    } else if (strictLevelMatch) {
+        optionsBody += `<option value="" disabled>Đã chọn hết VĐV Level ${targetLevel}</option>`;
     } else {
         optionsBody += '<option value="" disabled>Đã chọn hết VĐV ĐK</option>';
     }
@@ -1067,6 +1076,154 @@ export function sumSubMatchPlayerStats(subMatch) {
         }
     }
     return totals;
+}
+
+const VALID_RALLY_OUTCOMES = new Set(['server-ace', 'receiver-error', 'server-out', 'receiver-win']);
+const VALID_RALLY_SLOTS = new Set(['a1', 'a2', 'b1', 'b2']);
+
+/**
+ * Normalizes per-set persistent rally history arrays inside `subMatch.format_override.setRallyLogs`.
+ */
+export function normalizeSetRallyLogs(rawLogs, setCount = 1) {
+    const rawArr = Array.isArray(rawLogs) ? rawLogs : [];
+    const count = Math.max(1, Number(setCount) || 1, rawArr.length);
+    return Array.from({ length: count }, (_, idx) => {
+        const list = Array.isArray(rawArr[idx]) ? rawArr[idx] : [];
+        const cleanList = [];
+        for (const item of list) {
+            if (!item || typeof item !== 'object') continue;
+            if (!VALID_RALLY_OUTCOMES.has(item.outcome)) continue;
+            const sSlot = VALID_RALLY_SLOTS.has(item.sSlot) ? item.sSlot : 'a1';
+            const rSlot = VALID_RALLY_SLOTS.has(item.rSlot) ? item.rSlot : 'b1';
+            const sSide = item.sSide === 'b' || sSlot.startsWith('b') ? 'b' : 'a';
+            const scored = Boolean(item.scored ?? (item.outcome === 'server-ace' || item.outcome === 'receiver-error'));
+            const sideOut = Boolean(item.sideOut);
+            cleanList.push({
+                n: Math.max(1, Number(item.n) || cleanList.length + 1),
+                outcome: item.outcome,
+                sSide,
+                sSlot,
+                rSlot,
+                turn: Number(item.turn) === 2 ? 2 : 1,
+                nextTurn: Number(item.nextTurn) === 2 ? 2 : 1,
+                sPos: Number(item.sPos) === 2 ? 2 : 1,
+                rPos: Number(item.rPos) === 2 ? 2 : 1,
+                a: Math.max(0, Math.min(99, Number(item.a) || 0)),
+                b: Math.max(0, Math.min(99, Number(item.b) || 0)),
+                scored,
+                sideOut,
+                call: String(item.call || '').slice(0, 16),
+                ts: String(item.ts || '').slice(0, 40)
+            });
+        }
+        return cleanList;
+    });
+}
+
+/**
+ * Creates a compact rally history log entry from before/after rally snapshots.
+ */
+export function createRallyLogEntry({
+    seq = 1,
+    rallyBefore,
+    outcome,
+    result,
+    scoreBefore,
+    pairA,
+    pairB,
+    timestamp = ''
+}) {
+    if (!VALID_RALLY_OUTCOMES.has(outcome) || !result) return null;
+    const cur = normalizeRallyState(rallyBefore, pairA, pairB);
+    const sSide = cur.serverSlot.startsWith('a') ? 'a' : 'b';
+    const serverOrder = sSide === 'a' ? cur.orderA : cur.orderB;
+    const oppOrder = sSide === 'a' ? cur.orderB : cur.orderA;
+    const sPos = Math.max(1, serverOrder.indexOf(cur.serverSlot) + 1);
+    const rPos = Math.max(1, oppOrder.indexOf(cur.receiverSlot) + 1);
+    const beforeA = Math.max(0, Number(scoreBefore?.a) || 0);
+    const beforeB = Math.max(0, Number(scoreBefore?.b) || 0);
+    const serverScoreBefore = sSide === 'a' ? beforeA : beforeB;
+    const recvScoreBefore = sSide === 'a' ? beforeB : beforeA;
+    const nextSide = result.rally?.serverSlot?.startsWith('b') ? 'b' : 'a';
+
+    return {
+        n: Math.max(1, Number(seq) || 1),
+        outcome,
+        sSide,
+        sSlot: cur.serverSlot,
+        rSlot: cur.receiverSlot,
+        turn: cur.serveTurn,
+        nextTurn: Number(result.rally?.serveTurn) === 2 ? 2 : 1,
+        sPos: sPos === 2 ? 2 : 1,
+        rPos: rPos === 2 ? 2 : 1,
+        a: Math.max(0, Number(result.setScore?.a) || 0),
+        b: Math.max(0, Number(result.setScore?.b) || 0),
+        scored: outcome === 'server-ace' || outcome === 'receiver-error',
+        sideOut: nextSide !== sSide,
+        call: `${serverScoreBefore}-${recvScoreBefore}-${cur.serveTurn}`,
+        ts: String(timestamp || '')
+    };
+}
+
+/**
+ * Computes set analytics (longest scoring runs, side-outs, max leads, progression points) from rally logs.
+ */
+export function summarizeSetRallyLog(logs = []) {
+    const clean = normalizeSetRallyLogs([logs], 1)[0] || [];
+    let scoringRallies = 0;
+    let sideOuts = 0;
+    let maxRunA = 0;
+    let maxRunB = 0;
+    let curRunA = 0;
+    let curRunB = 0;
+    let largestLeadA = 0;
+    let largestLeadB = 0;
+    const first = clean[0];
+    const startA = first ? Math.max(0, first.a - (first.scored && first.sSide === 'a' ? 1 : 0)) : 0;
+    const startB = first ? Math.max(0, first.b - (first.scored && first.sSide === 'b' ? 1 : 0)) : 0;
+    const timeline = [{ n: 0, a: startA, b: startB }];
+
+    for (const e of clean) {
+        if (e.sideOut) sideOuts += 1;
+        if (e.scored) {
+            scoringRallies += 1;
+            if (e.sSide === 'a') {
+                curRunA += 1;
+                curRunB = 0;
+                if (curRunA > maxRunA) maxRunA = curRunA;
+            } else {
+                curRunB += 1;
+                curRunA = 0;
+                if (curRunB > maxRunB) maxRunB = curRunB;
+            }
+        } else if (e.sideOut) {
+            curRunA = 0;
+            curRunB = 0;
+        }
+
+        const lead = e.a - e.b;
+        if (lead > largestLeadA) largestLeadA = lead;
+        if (-lead > largestLeadB) largestLeadB = -lead;
+
+        timeline.push({
+            n: e.n,
+            a: e.a,
+            b: e.b,
+            sSide: e.sSide,
+            scored: e.scored
+        });
+    }
+
+    return {
+        totalRallies: clean.length,
+        scoringRallies,
+        sideOuts,
+        maxRunA,
+        maxRunB,
+        largestLeadA,
+        largestLeadB,
+        timeline
+    };
 }
 
 /**
