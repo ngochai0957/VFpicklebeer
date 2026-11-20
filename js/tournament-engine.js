@@ -19,6 +19,8 @@ export const TEAM_COLOR_PALETTE = [
     '#9333EA'  // Violet
 ];
 
+export const AWARDS_VISIBILITY_MODES = ['public', 'anonymous', 'hidden'];
+
 export const DEFAULT_CONFIG = {
     bestOf: 3,
     pointsPerSet: 11,
@@ -26,8 +28,17 @@ export const DEFAULT_CONFIG = {
     pointCap: 0,
     levelsCount: 3,
     levelNames: ['Level 1', 'Level 2', 'Level 3'],
-    doubleRoundRobin: false
+    doubleRoundRobin: false,
+    registrationOpen: true,
+    awardsVisibility: 'public',
+    awardsMaskSeed: 1
 };
+
+export const SKILL_LEVEL_OPTIONS = [
+    'Bậc thầy lão luyện',
+    'Dui dẻ sương sương',
+    'Mầm non tập sự'
+];
 
 export function escapeHtml(value) {
     if (value === null || value === undefined) return '';
@@ -59,6 +70,12 @@ export function normalizeConfig(rawConfig) {
         const custom = typeof rawNames[i - 1] === 'string' ? rawNames[i - 1].trim() : '';
         levelNames.push(custom || `Level ${i}`);
     }
+    const awardsVisibility = AWARDS_VISIBILITY_MODES.includes(merged.awardsVisibility)
+        ? merged.awardsVisibility
+        : 'public';
+    const rawMaskSeed = Number(merged.awardsMaskSeed);
+    const awardsMaskSeed = Number.isFinite(rawMaskSeed) && rawMaskSeed >= 1 ? Math.floor(rawMaskSeed) : 1;
+
     return {
         bestOf: [1, 3, 5].includes(Number(merged.bestOf)) ? Number(merged.bestOf) : 3,
         pointsPerSet: Math.max(1, Number(merged.pointsPerSet) || 11),
@@ -66,7 +83,10 @@ export function normalizeConfig(rawConfig) {
         pointCap: Math.max(0, Number(merged.pointCap) || 0),
         levelsCount,
         levelNames,
-        doubleRoundRobin: Boolean(merged.doubleRoundRobin)
+        doubleRoundRobin: Boolean(merged.doubleRoundRobin),
+        registrationOpen: merged.registrationOpen !== false,
+        awardsVisibility,
+        awardsMaskSeed
     };
 }
 
@@ -796,6 +816,80 @@ export function applyRallyOutcomeToSet(rawStatsRow, rawScoreRow, rawRally, outco
     return { statRow, setScore, rally: nextRally };
 }
 
+/**
+ * Validates and normalizes a player pre-registration submission.
+ */
+export function sanitizeRegistrationPayload(raw) {
+    const fullName = String(raw?.full_name || '').trim().slice(0, 80);
+    if (!fullName) {
+        throw new Error('Vui lòng nhập Họ và tên.');
+    }
+
+    const rawDisplay = String(raw?.display_name || '').trim().slice(0, 40);
+    const displayName = rawDisplay || fullName.slice(0, 40);
+
+    const skillLevel = String(raw?.skill_level || '').trim().slice(0, 60);
+    if (!skillLevel) {
+        throw new Error('Vui lòng chọn Trình độ (Tự đánh giá).');
+    }
+
+    return {
+        full_name: fullName,
+        display_name: displayName,
+        skill_level: skillLevel,
+        preferred_partner: '',
+        avoid_partner: ''
+    };
+}
+
+/**
+ * Returns sort priority for skill levels ordered descending from 'Bậc thầy lão luyện' (0) down to 'Mầm non tập sự' (2).
+ */
+export function getSkillLevelRank(skillLabel) {
+    const text = String(skillLabel || '').trim();
+    const exactIdx = SKILL_LEVEL_OPTIONS.indexOf(text);
+    if (exactIdx >= 0) return exactIdx;
+    const lower = text.toLowerCase();
+    if (lower.includes('lão luyện') || lower.includes('bậc thầy') || lower.includes('level 3') || lower.includes('3.0')) return 0;
+    if (lower.includes('dui dẻ') || lower.includes('sương sương') || lower.includes('2.5') || lower.includes('level 2')) return 1;
+    if (lower.includes('mầm non') || lower.includes('tập sự') || lower.includes('1.5') || lower.includes('level 1')) return 2;
+    return 99;
+}
+
+/**
+ * Summarizes pre-tournament player registrations ordered from 'Bậc thầy lão luyện' down to 'Mầm non tập sự'.
+ */
+export function summarizeRegistrations(registrations = []) {
+    const list = Array.isArray(registrations) ? registrations : [];
+    let approved = 0;
+    let pending = 0;
+    let rejected = 0;
+    const skillCounts = new Map(SKILL_LEVEL_OPTIONS.map((opt) => [opt, 0]));
+
+    for (const r of list) {
+        const st = r?.status || 'pending';
+        if (st === 'approved') approved += 1;
+        else if (st === 'rejected') rejected += 1;
+        else pending += 1;
+
+        const skill = String(r?.skill_level || 'Chưa rõ').trim() || 'Chưa rõ';
+        skillCounts.set(skill, (skillCounts.get(skill) || 0) + 1);
+    }
+
+    const bySkill = Array.from(skillCounts.entries())
+        .map(([label, count]) => ({ label, count, rank: getSkillLevelRank(label) }))
+        .sort((a, b) => a.rank - b.rank || b.count - a.count || a.label.localeCompare(b.label, 'vi'))
+        .map(({ label, count }) => ({ label, count }));
+
+    return {
+        total: list.length,
+        approved,
+        pending,
+        rejected,
+        bySkill
+    };
+}
+
 export function normalizeSetPlayerStats(rawStats, setCount = 1) {
     const count = Math.max(1, Number(setCount) || 1);
     const list = Array.isArray(rawStats) ? rawStats : [];
@@ -1005,6 +1099,116 @@ export function calculatePlayerLeaderboard(teams, teamPairs, teamMatches, subMat
         byPoints,
         byErrors,
         hasAnyStats: baseList.some((p) => p.totalPoints > 0 || p.totalErrors > 0)
+    };
+}
+
+const ANON_MASKED_TEAM = Object.freeze({
+    id: 'anon',
+    name: '?',
+    code: '?',
+    color: '#64748b'
+});
+
+function hashStringWithSeed(str, seed) {
+    let h = (2166136261 ^ (seed >>> 0)) >>> 0;
+    const text = String(str || '');
+    for (let i = 0; i < text.length; i += 1) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h >>> 0;
+}
+
+function buildSeededPermutation(length, seed, salt) {
+    const indices = Array.from({ length }, (_, idx) => idx);
+    let state = (hashStringWithSeed(salt, seed) || 0x9e3779b9) >>> 0;
+    for (let i = indices.length - 1; i > 0; i -= 1) {
+        state ^= (state << 13) >>> 0;
+        state ^= (state >>> 17) >>> 0;
+        state ^= (state << 5) >>> 0;
+        const j = (state >>> 0) % (i + 1);
+        const tmp = indices[i];
+        indices[i] = indices[j];
+        indices[j] = tmp;
+    }
+    return indices;
+}
+
+function formatThreeDigitCode(pool, index) {
+    if (index < pool.length) {
+        return String(100 + pool[index]);
+    }
+    return String(100 + index);
+}
+
+/**
+ * Deterministically replaces pair and player identities with unique 3-digit
+ * random codes ("Cặp đôi XXX" / "Cá nhân XXX"), masks teams/levels as "?",
+ * and strips per-match logs while keeping aggregate statistics intact.
+ */
+export function anonymizeAwardsLeaderboards(pairRows = [], playerBoard = {}, seed = 1) {
+    const numericSeed = Number.isFinite(Number(seed)) && Number(seed) >= 1 ? Math.floor(Number(seed)) : 1;
+
+    const getPairKey = (row, fallbackIdx) => (
+        row?.pair?.id
+        || `${row?.team?.id || ''}::${row?.levelName || ''}::${row?.playersText || fallbackIdx}`
+    );
+    const getPlayerKey = (row, fallbackIdx) => (
+        row?.key
+        || `${row?.team?.id || ''}::${String(row?.name || fallbackIdx).toLowerCase()}`
+    );
+
+    const uniquePairKeys = Array.from(new Set((pairRows || []).map(getPairKey))).sort();
+    const pairCodePool = buildSeededPermutation(900, numericSeed, 'pairs3d');
+    const pairAliasMap = new Map();
+    uniquePairKeys.forEach((key, idx) => {
+        pairAliasMap.set(key, `Cặp đôi ${formatThreeDigitCode(pairCodePool, idx)}`);
+    });
+
+    const allPlayerRows = [
+        ...(playerBoard.players || []),
+        ...(playerBoard.byPoints || []),
+        ...(playerBoard.byErrors || [])
+    ];
+    const uniquePlayerKeys = Array.from(new Set(allPlayerRows.map(getPlayerKey))).sort();
+    const playerCodePool = buildSeededPermutation(900, numericSeed, 'players3d');
+    const playerAliasMap = new Map();
+    uniquePlayerKeys.forEach((key, idx) => {
+        playerAliasMap.set(key, `Cá nhân ${formatThreeDigitCode(playerCodePool, idx)}`);
+    });
+
+    const maskedPairs = (pairRows || []).map((row, idx) => {
+        const alias = pairAliasMap.get(getPairKey(row, idx)) || `Cặp đôi ${String(100 + idx)}`;
+        return {
+            ...row,
+            pair: row.pair ? { id: `anon_pair_${idx + 1}`, team_id: 'anon', pair_label: '?' } : row.pair,
+            team: { ...ANON_MASKED_TEAM },
+            levelName: '?',
+            playersText: alias
+        };
+    });
+
+    const maskPlayerRow = (row, idx) => {
+        const alias = playerAliasMap.get(getPlayerKey(row, idx)) || `Cá nhân ${String(100 + idx)}`;
+        return {
+            ...row,
+            key: `anon_player_${idx + 1}`,
+            name: alias,
+            team: { ...ANON_MASKED_TEAM },
+            pairLabel: '?',
+            levelLabel: '?',
+            matchLogs: []
+        };
+    };
+
+    return {
+        pairRows: maskedPairs,
+        playerBoard: {
+            players: (playerBoard.players || []).map(maskPlayerRow),
+            byPoints: (playerBoard.byPoints || []).map(maskPlayerRow),
+            byErrors: (playerBoard.byErrors || []).map(maskPlayerRow),
+            hasAnyStats: Boolean(playerBoard.hasAnyStats)
+        }
     };
 }
 

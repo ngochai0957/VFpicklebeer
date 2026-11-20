@@ -117,6 +117,53 @@ CREATE TABLE IF NOT EXISTS public.sub_matches (
 
 CREATE INDEX IF NOT EXISTS idx_sub_matches_team_match ON public.sub_matches(team_match_id, level_index);
 
+-- 6b. Pre-tournament Player Registrations (Google-Form style)
+-- Anonymous visitors with ?register=1 link can ONLY INSERT; ONLY Admin can SELECT/UPDATE/DELETE.
+CREATE TABLE IF NOT EXISTS public.player_registrations (
+    id TEXT PRIMARY KEY,
+    tournament_id TEXT NOT NULL REFERENCES public.tournaments(id) ON DELETE CASCADE,
+    full_name TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    skill_level TEXT NOT NULL DEFAULT '',
+    preferred_partner TEXT NOT NULL DEFAULT '',
+    avoid_partner TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_reg_tournament ON public.player_registrations(tournament_id, created_at DESC);
+
+ALTER TABLE public.player_registrations ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public submit registration" ON public.player_registrations;
+CREATE POLICY "Public submit registration"
+    ON public.player_registrations
+    FOR INSERT
+    TO anon, authenticated
+    WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Admin read registrations" ON public.player_registrations;
+CREATE POLICY "Admin read registrations"
+    ON public.player_registrations
+    FOR SELECT
+    TO authenticated
+    USING (public.is_admin());
+
+DROP POLICY IF EXISTS "Admin update registrations" ON public.player_registrations;
+CREATE POLICY "Admin update registrations"
+    ON public.player_registrations
+    FOR UPDATE
+    TO authenticated
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
+
+DROP POLICY IF EXISTS "Admin delete registrations" ON public.player_registrations;
+CREATE POLICY "Admin delete registrations"
+    ON public.player_registrations
+    FOR DELETE
+    TO authenticated
+    USING (public.is_admin());
+
 -- 7. Updated_at trigger on tournaments
 CREATE OR REPLACE FUNCTION public.touch_tournament_updated_at()
 RETURNS TRIGGER

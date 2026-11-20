@@ -1,16 +1,65 @@
 import { APP_CONFIG } from './config.js';
 import {
+    SKILL_LEVEL_OPTIONS,
     escapeHtml,
     evaluateSubMatch,
     evaluateTeamMatch,
     formatScheduleRaw,
+    getSkillLevelRank,
     getSubMatchDisplayOrder,
     getTeamMatchCourts,
     normalizeConfig,
     normalizeRallyState,
     normalizeSetPlayerStats,
-    parseScheduleValue
+    parseScheduleValue,
+    summarizeRegistrations
 } from './tournament-engine.js';
+
+export const REGISTRATION_TABLE_SQL = `-- Chạy 1 lần trong Supabase SQL Editor để bật bảng Đăng ký VĐV (?register=1):
+CREATE TABLE IF NOT EXISTS public.player_registrations (
+    id TEXT PRIMARY KEY,
+    tournament_id TEXT NOT NULL REFERENCES public.tournaments(id) ON DELETE CASCADE,
+    full_name TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    skill_level TEXT NOT NULL DEFAULT '',
+    preferred_partner TEXT NOT NULL DEFAULT '',
+    avoid_partner TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_player_reg_tournament ON public.player_registrations(tournament_id, created_at DESC);
+
+ALTER TABLE public.player_registrations ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Public submit registration" ON public.player_registrations;
+CREATE POLICY "Public submit registration"
+    ON public.player_registrations
+    FOR INSERT
+    TO anon, authenticated
+    WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Admin read registrations" ON public.player_registrations;
+CREATE POLICY "Admin read registrations"
+    ON public.player_registrations
+    FOR SELECT
+    TO authenticated
+    USING (public.is_admin());
+
+DROP POLICY IF EXISTS "Admin update registrations" ON public.player_registrations;
+CREATE POLICY "Admin update registrations"
+    ON public.player_registrations
+    FOR UPDATE
+    TO authenticated
+    USING (public.is_admin())
+    WITH CHECK (public.is_admin());
+
+DROP POLICY IF EXISTS "Admin delete registrations" ON public.player_registrations;
+CREATE POLICY "Admin delete registrations"
+    ON public.player_registrations
+    FOR DELETE
+    TO authenticated
+    USING (public.is_admin());`;
 
 export function renderAdminLoginModal(storeMode, errorMessage = '') {
     const isSupabase = storeMode === 'supabase';
@@ -176,10 +225,6 @@ function renderScoreOperatorSubtab(state, adminState) {
                     : `<span class="tag tag-round">Set ${setIdx + 1}</span>`);
 
             const rowStats = setStats[setIdx];
-            const sumPtsA = rowStats.a1.points + rowStats.a2.points;
-            const sumPtsB = rowStats.b1.points + rowStats.b2.points;
-            const sumErrA = rowStats.a1.errors + rowStats.a2.errors;
-            const sumErrB = rowStats.b1.errors + rowStats.b2.errors;
             const rallyKey = `${sm.id}:${setIdx}`;
             const rallyState = normalizeRallyState(adminState.rallyBySet?.[rallyKey], pairA, pairB);
             const undoCount = Array.isArray(adminState.rallyUndoBySet?.[rallyKey])
@@ -210,8 +255,8 @@ function renderScoreOperatorSubtab(state, adminState) {
 
             return `
                 <div class="set-editor-block" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">
-                    <div class="set-editor-row" style="margin-top:0;border:none;padding:0;background:transparent;">
-                        <div style="display:flex;align-items:center;gap:8px;min-width:130px;">
+                    <div class="set-editor-row set-sticky-scorebar">
+                        <div class="set-sticky-meta">
                             ${winBadge}
                         </div>
 
@@ -225,7 +270,7 @@ function renderScoreOperatorSubtab(state, adminState) {
                             ${rightBoardBadge}
                         </div>
 
-                        <div style="display:flex;align-items:center;gap:6px;">
+                        <div class="set-sticky-actions">
                             <button type="button" class="btn btn-secondary btn-sm" data-action="reset-set-stats" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" title="Đặt lại điểm Set và thống kê cá nhân Set này về 0">⟲ Đặt lại Set</button>
                             ${sets.length > 1
                     ? `<button type="button" class="btn btn-danger btn-sm" data-action="remove-set" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">Xóa Set</button>`
@@ -235,12 +280,6 @@ function renderScoreOperatorSubtab(state, adminState) {
                     </div>
 
                     <div class="set-player-box">
-                        <div class="set-player-head">
-                            <span>Thống kê cá nhân Set ${setIdx + 1}</span>
-                            <span class="section-sub">
-                                Điểm Set chỉ + khi bên Phát ghi điểm · Cá nhân: <strong>${escapeHtml(pairA?.pair_label || 'A')} ${sumPtsA}đ</strong> (Out ${sumErrA}) · <strong>${escapeHtml(pairB?.pair_label || 'B')} ${sumPtsB}đ</strong> (Out ${sumErrB})
-                            </span>
-                        </div>
                         <div class="rally-control-bar">
                             <div class="rally-status-wrap">
                                 <div class="serve-turn-pills" role="group" aria-label="Lượt phát bóng">
@@ -275,55 +314,71 @@ function renderScoreOperatorSubtab(state, adminState) {
         const ovTime = String(sm.format_override?.scheduledTime || '').trim();
         const tmSchedForPlaceholder = parseScheduleValue(match.scheduled_time);
 
+        const pairACode = pairA?.pair_label || `${teamA?.code || 'A'}${sm.level_index}`;
+        const pairBCode = pairB?.pair_label || `${teamB?.code || 'B'}${sm.level_index}`;
+        const pairANames = pairA ? `${pairA.player_1}${pairA.player_2 ? ` / ${pairA.player_2}` : ''}` : pairACode;
+        const pairBNames = pairB ? `${pairB.player_1}${pairB.player_2 ? ` / ${pairB.player_2}` : ''}` : pairBCode;
+
         return `
             <div class="scorer-sub-card">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span class="tag ${hasCustomOrder ? 'tag-round' : ''}" style="background:var(--paper);border:1px solid var(--line);color:var(--ink);font-weight:800;">#${idx + 1}</span>
-                        <div class="stepper-group" style="padding:2px 4px;gap:2px;">
-                            <button type="button" class="btn-step" data-action="move-sub-order" data-sub-id="${escapeHtml(sm.id)}" data-dir="up" ${idx === 0 ? 'disabled style="opacity:0.35;cursor:not-allowed;"' : ''} title="Đưa cặp này lên trước" aria-label="Đưa lên">&#8593;</button>
-                            <button type="button" class="btn-step" data-action="move-sub-order" data-sub-id="${escapeHtml(sm.id)}" data-dir="down" ${idx === totalSubs - 1 ? 'disabled style="opacity:0.35;cursor:not-allowed;"' : ''} title="Đưa cặp này xuống sau" aria-label="Đưa xuống">&#8595;</button>
+                <div class="scorer-sub-toprow">
+                    <div class="scorer-sub-idgroup">
+                        <span class="scorer-num-badge ${hasCustomOrder ? 'is-custom' : ''}">#${idx + 1}</span>
+                        <div class="scorer-order-btns">
+                            <button type="button" class="btn-step sm" data-action="move-sub-order" data-sub-id="${escapeHtml(sm.id)}" data-dir="up" ${idx === 0 ? 'disabled' : ''} title="Đưa cặp này lên trước" aria-label="Đưa lên">&#8593;</button>
+                            <button type="button" class="btn-step sm" data-action="move-sub-order" data-sub-id="${escapeHtml(sm.id)}" data-dir="down" ${idx === totalSubs - 1 ? 'disabled' : ''} title="Đưa cặp này xuống sau" aria-label="Đưa xuống">&#8595;</button>
                         </div>
                         <span class="level-pill">${escapeHtml(levelName)}</span>
-                        <strong>${escapeHtml(pairAText)}</strong>
-                        <span style="color:var(--muted);">vs</span>
-                        <strong>${escapeHtml(pairBText)}</strong>
                     </div>
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <span class="tag ${ev.winner ? 'tag-status-completed' : 'tag-round'}">
-                            Final: ${ev.setsWonA} - ${ev.setsWonB}
-                            ${ev.winner ? ` (${ev.winner === 'A' ? escapeHtml(pairA?.pair_label || 'A') : escapeHtml(pairB?.pair_label || 'B')} thắng)` : ''}
-                        </span>
-                        <div class="quick-chip-row">
-                            <button type="button" class="quick-chip ${ev.effectiveStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming" title="Ẩn trên màn hình Live">Chưa đấu</button>
-                            <button type="button" class="quick-chip ${ev.effectiveStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready" title="Hiện nhẹ trên màn hình Live để chuẩn bị">Sắp đấu</button>
-                            <button type="button" class="quick-chip live ${ev.effectiveStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">● Đang đấu</button>
-                            <button type="button" class="quick-chip ${ev.effectiveStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">✓ Xong</button>
-                        </div>
-                        <select class="select-clean" data-action="sub-bestof" data-sub-id="${escapeHtml(sm.id)}" style="padding:4px 8px;font-size:12px;" title="Thể thức set riêng cho trận này">
-                            <option value="default" ${currentBestOf === 'default' ? 'selected' : ''}>Mặc định (Bo${config.bestOf})</option>
-                            <option value="1" ${currentBestOf === '1' ? 'selected' : ''}>Bo1 (1 Set)</option>
-                            <option value="3" ${currentBestOf === '3' ? 'selected' : ''}>Bo3 (Thắng 2)</option>
-                            <option value="5" ${currentBestOf === '5' ? 'selected' : ''}>Bo5 (Thắng 3)</option>
-                        </select>
-                        <select class="select-clean" data-action="sub-points" data-sub-id="${escapeHtml(sm.id)}" style="padding:4px 8px;font-size:12px;" title="Số điểm mỗi set">
-                            <option value="default" ${currentPts === 'default' ? 'selected' : ''}>Mặc định (${config.pointsPerSet}đ)</option>
-                            <option value="11" ${currentPts === '11' ? 'selected' : ''}>11 điểm</option>
-                            <option value="15" ${currentPts === '15' ? 'selected' : ''}>15 điểm</option>
-                            <option value="21" ${currentPts === '21' ? 'selected' : ''}>21 điểm</option>
-                        </select>
+                    <span class="tag ${ev.winner ? 'tag-status-completed' : 'tag-round'}">
+                        Final: ${ev.setsWonA} - ${ev.setsWonB}${ev.winner ? ` (${ev.winner === 'A' ? escapeHtml(pairA?.pair_label || 'A') : escapeHtml(pairB?.pair_label || 'B')} thắng)` : ''}
+                    </span>
+                </div>
+
+                <div class="scorer-sub-matchup">
+                    <div class="scorer-pair-chip side-a">
+                        <span class="scorer-pair-code" style="background:${escapeHtml(teamA?.color || '#2563EB')}">${escapeHtml(pairACode)}</span>
+                        <span class="scorer-pair-names">${escapeHtml(pairANames)}</span>
+                    </div>
+                    <span class="scorer-vs-badge">VS</span>
+                    <div class="scorer-pair-chip side-b">
+                        <span class="scorer-pair-code" style="background:${escapeHtml(teamB?.color || '#E05328')}">${escapeHtml(pairBCode)}</span>
+                        <span class="scorer-pair-names">${escapeHtml(pairBNames)}</span>
                     </div>
                 </div>
 
-                <div class="sub-schedule-strip">
-                    
-                    <div class="sub-sched-grid">
+                <div class="scorer-sub-toolbar">
+                    <div class="scorer-sub-status-row">
+                        <button type="button" class="quick-chip ${ev.effectiveStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming" title="Ẩn trên màn hình Live">Chưa đấu</button>
+                        <button type="button" class="quick-chip ${ev.effectiveStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready" title="Hiện nhẹ trên màn hình Live để chuẩn bị">Sắp đấu</button>
+                        <button type="button" class="quick-chip live ${ev.effectiveStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">● Đang đấu</button>
+                        <button type="button" class="quick-chip ${ev.effectiveStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">✓ Xong</button>
+                    </div>
+                    <div class="scorer-sub-settings-grid">
                         <div>
-                            <label class="form-label" style="font-size:11px;margin-bottom:4px;">Sân riêng</label>
+                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Thể thức</label>
+                            <select class="select-clean" data-action="sub-bestof" data-sub-id="${escapeHtml(sm.id)}" title="Thể thức set riêng cho trận này">
+                                <option value="default" ${currentBestOf === 'default' ? 'selected' : ''}>Mặc định (Bo${config.bestOf})</option>
+                                <option value="1" ${currentBestOf === '1' ? 'selected' : ''}>Bo1 (1 Set)</option>
+                                <option value="3" ${currentBestOf === '3' ? 'selected' : ''}>Bo3 (Thắng 2)</option>
+                                <option value="5" ${currentBestOf === '5' ? 'selected' : ''}>Bo5 (Thắng 3)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Điểm/Set</label>
+                            <select class="select-clean" data-action="sub-points" data-sub-id="${escapeHtml(sm.id)}" title="Số điểm mỗi set">
+                                <option value="default" ${currentPts === 'default' ? 'selected' : ''}>Mặc định (${config.pointsPerSet}đ)</option>
+                                <option value="11" ${currentPts === '11' ? 'selected' : ''}>11 điểm</option>
+                                <option value="15" ${currentPts === '15' ? 'selected' : ''}>15 điểm</option>
+                                <option value="21" ${currentPts === '21' ? 'selected' : ''}>21 điểm</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Sân riêng</label>
                             <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="court" value="${escapeHtml(ovCourt)}" placeholder="Theo trận (${escapeHtml(match.court || 'Sân 1')})">
                         </div>
                         <div>
-                            <label class="form-label" style="font-size:11px;margin-bottom:4px;">Giờ riêng</label>
+                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Giờ riêng</label>
                             <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="scheduledTime" value="${escapeHtml(ovTime)}" placeholder="${escapeHtml(tmSchedForPlaceholder.time || '08:30')}">
                         </div>
                     </div>
@@ -347,26 +402,30 @@ function renderScoreOperatorSubtab(state, adminState) {
                 </select>
             </div>
 
-            <form id="admin-match-meta-form" data-match-id="${escapeHtml(match.id)}" style="background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:16px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">
-                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                        <span class="team-code-dot" style="background:${escapeHtml(teamA?.color || '#0E7C5B')}">${escapeHtml(teamA?.code || 'A')}</span>
-                        <strong>${escapeHtml(teamA?.name || 'Đội A')}</strong>
-                        <span style="font-size:22px;font-weight:900;padding:3px 14px;background:var(--ink);color:#fff;border-radius:99px;">
+            <form id="admin-match-meta-form" data-match-id="${escapeHtml(match.id)}" class="admin-match-meta-form">
+                <div class="admin-tm-head-bar">
+                    <div class="admin-tm-matchup-row">
+                        <div class="admin-tm-side left">
+                            <span class="team-code-dot sm" style="background:${escapeHtml(teamA?.color || '#0E7C5B')}">${escapeHtml(teamA?.code || 'A')}</span>
+                            <strong>${escapeHtml(teamA?.name || 'Đội A')}</strong>
+                        </div>
+                        <span class="admin-tm-score tabular">
                             ${evalTm.subWinsA} : ${evalTm.subWinsB}
                         </span>
-                        <strong>${escapeHtml(teamB?.name || 'Đội B')}</strong>
-                        <span class="team-code-dot" style="background:${escapeHtml(teamB?.color || '#E05328')}">${escapeHtml(teamB?.code || 'B')}</span>
+                        <div class="admin-tm-side right">
+                            <strong>${escapeHtml(teamB?.name || 'Đội B')}</strong>
+                            <span class="team-code-dot sm" style="background:${escapeHtml(teamB?.color || '#E05328')}">${escapeHtml(teamB?.code || 'B')}</span>
+                        </div>
                     </div>
-                    <div class="quick-chip-row">
+                    <div class="admin-tm-quick-bar">
                         <button type="button" class="quick-chip ${match.status === 'upcoming' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="upcoming">Sắp đấu</button>
-                        <button type="button" class="quick-chip live ${match.status === 'live' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="live">● Đang LIVE</button>
-                        <button type="button" class="quick-chip ${match.status === 'completed' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="completed">✓ Hoàn thành</button>
-                        <button type="submit" class="btn btn-primary btn-sm">Lưu sân / giờ</button>
+                        <button type="button" class="quick-chip live ${match.status === 'live' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="live">● LIVE</button>
+                        <button type="button" class="quick-chip ${match.status === 'completed' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="completed">✓ Xong</button>
+                        <button type="submit" class="btn btn-primary btn-sm">Lưu</button>
                     </div>
                 </div>
 
-                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:10px;">
+                <div class="admin-tm-meta-grid">
                     <div>
                         <label class="form-label">Trạng thái Team Match</label>
                         <select name="status" class="form-select">
@@ -377,10 +436,7 @@ function renderScoreOperatorSubtab(state, adminState) {
                     </div>
                     <div>
                         <label class="form-label">Sân mặc định (cả trận)</label>
-                        <input name="court" class="form-input" value="${escapeHtml(match.court)}" placeholder="Sân 1">
-                        <div class="quick-chip-row" style="margin-top:6px;">
-                            ${['Sân 1', 'Sân 2', 'Sân 3', 'Sân 4'].map((c) => `<button type="button" class="quick-chip ${match.court === c ? 'active' : ''}" data-action="quick-match-court" data-match-id="${escapeHtml(match.id)}" data-court="${c}">${c}</button>`).join('')}
-                        </div>
+                        <input name="court" class="form-input" value="${escapeHtml(match.court)}" placeholder="VD: Sân 1">
                     </div>
                     <div>
                         <label class="form-label">Ngày thi đấu</label>
@@ -390,24 +446,12 @@ function renderScoreOperatorSubtab(state, adminState) {
                         <label class="form-label">Giờ thi đấu</label>
                         <input name="scheduled_time" class="form-input" value="${escapeHtml(parseScheduleValue(match.scheduled_time).time)}" placeholder="09:30">
                     </div>
-                    <div>
+                    <div class="admin-meta-note-field">
                         <label class="form-label">Ghi chú</label>
                         <input name="note" class="form-input" value="${escapeHtml(match.note)}" placeholder="VD: Trận tâm điểm">
                     </div>
                 </div>
             </form>
-
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px;padding:10px 14px;background:var(--paper);border:1px solid var(--line);border-radius:14px;">
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                    <span class="section-sub"><strong>Luật Side-Out &amp; Cá nhân:</strong> chọn <strong>🎾 Phát</strong> / <strong>🛡 Đỡ</strong> — chỉ <strong>bên Phát ghi điểm</strong> mới +1 Điểm Set; <strong>phát hỏng</strong> hoặc <strong>đỡ được</strong> không cộng điểm Set và tự chuyển lượt (1→2→Đổi giao).</span>
-                </div>
-                <div class="quick-chip-row">
-                    <button type="button" class="quick-chip" data-action="assign-multi-courts" data-match-id="${escapeHtml(match.id)}" title="Gán Level 1 -> Sân 1, Level 2 -> Sân 2, Level 3 -> Sân 3">&#9889; Chia ${totalSubs} sân (Sân 1&rarr;${totalSubs})</button>
-                    <button type="button" class="quick-chip" data-action="clear-sub-courts" data-match-id="${escapeHtml(match.id)}" title="Đưa tất cả cặp về cùng sân mặc định của trận">&#8634; Gom 1 sân chung</button>
-                    <button type="button" class="quick-chip" data-action="sort-subs-by-status" data-match-id="${escapeHtml(match.id)}">&#8597; Ưu tiên Đang đấu &rarr; Sắp đấu</button>
-                    <button type="button" class="quick-chip" data-action="reset-sub-order" data-match-id="${escapeHtml(match.id)}">&#8634; Theo Level 1&rarr;${totalSubs}</button>
-                </div>
-            </div>
 
             ${subCardsHtml}
         </div>
@@ -668,6 +712,17 @@ function renderSettingsSubtab(state, storeMode) {
                     Bắt buộc thắng cách biệt 2 điểm (Win by 2)
                 </label>
 
+                <div style="margin-bottom:14px;">
+                    <label style="display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">
+                        Hiển thị Bảng Vinh Danh &amp; Point Cá Nhân (cho người xem công khai)
+                    </label>
+                    <select class="select-clean" name="awardsVisibility" style="width:100%;max-width:520px;">
+                        <option value="public" ${config.awardsVisibility === 'public' ? 'selected' : ''}>👁 Công khai đầy đủ (hiện tên thật VĐV &amp; cặp đấu)</option>
+                        <option value="anonymous" ${config.awardsVisibility === 'anonymous' ? 'selected' : ''}>🕶 Ẩn danh tên (giữ số liệu tổng, tự random mã 3 số mới mỗi lần mở trang)</option>
+                        <option value="hidden" ${config.awardsVisibility === 'hidden' ? 'selected' : ''}>🔒 Ẩn hoàn toàn (chỉ Admin mới xem được tab Vinh Danh &amp; Point)</option>
+                    </select>
+                </div>
+
                 <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;margin-bottom:16px;">
                     ${levelInputs}
                 </div>
@@ -689,7 +744,7 @@ function renderSettingsSubtab(state, storeMode) {
                         <input type="file" accept=".json,application/json" id="admin-import-json-input" class="hidden">
                     </label>
 
-                    <button type="button" class="btn btn-danger" data-action="reset-demo">Khôi phục dữ liệu mẫu (4 Đội × 3 Cặp)</button>
+                    <button type="button" class="btn btn-danger" data-action="reset-demo">Khôi phục dữ liệu mẫu (6 Đội × 3 Cặp)</button>
                 </div>
 
                 <div class="alert alert-info" style="margin-top:18px;margin-bottom:0;">
@@ -702,21 +757,220 @@ function renderSettingsSubtab(state, storeMode) {
     `;
 }
 
+function buildRegisterLink() {
+    if (typeof window === 'undefined') return 'https://vfpicklebeer.pages.dev/?register=1';
+    const url = new URL(window.location.href);
+    url.hash = '';
+    const keepDemo = url.searchParams.get('demo');
+    url.search = '';
+    if (keepDemo) url.searchParams.set('demo', keepDemo);
+    url.searchParams.set('register', '1');
+    return url.toString();
+}
+
+function formatRegDate(isoStr) {
+    if (!isoStr) return '';
+    try {
+        return new Date(isoStr).toLocaleString('vi-VN', {
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+    } catch {
+        return '';
+    }
+}
+
+function renderRegistrationsSubtab(state, adminState, storeMode) {
+    const config = normalizeConfig(state.tournament?.config);
+    const regs = Array.isArray(adminState.registrations) ? adminState.registrations : [];
+    const tableMissing = Boolean(adminState.registrationsTableMissing);
+    const regQuery = String(adminState.regQuery || '').trim().toLowerCase();
+    const regStatusFilter = adminState.regStatusFilter || 'all';
+    const summary = summarizeRegistrations(regs);
+    const registerUrl = buildRegisterLink();
+
+    const filteredRegs = regs
+        .filter((r) => {
+            if (regStatusFilter !== 'all' && (r.status || 'pending') !== regStatusFilter) return false;
+            if (regQuery) {
+                const hay = `${r.full_name || ''} ${r.display_name || ''} ${r.skill_level || ''}`.toLowerCase();
+                if (!hay.includes(regQuery)) return false;
+            }
+            return true;
+        })
+        .sort((a, b) => {
+            const rankDiff = getSkillLevelRank(a.skill_level) - getSkillLevelRank(b.skill_level);
+            if (rankDiff !== 0) return rankDiff;
+            return String(a.full_name || '').localeCompare(String(b.full_name || ''), 'vi');
+        });
+
+    const missingTableBanner = (storeMode === 'supabase' && tableMissing)
+        ? `
+            <div class="alert alert-warn" style="margin-bottom:16px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+                    <strong>Chưa tạo bảng <code>player_registrations</code> trên Supabase</strong>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="copy-reg-sql">📋 Copy SQL tạo bảng</button>
+                        <button type="button" class="btn btn-primary btn-sm" data-action="refresh-registrations">↻ Kiểm tra lại</button>
+                    </div>
+                </div>
+                <p style="margin:0 0 8px;">Chạy đoạn SQL sau 1 lần trong <strong>Supabase Dashboard → SQL Editor</strong> để VĐV gửi form được và chỉ Admin mới xem được danh sách:</p>
+                <pre class="sql-snippet">${escapeHtml(REGISTRATION_TABLE_SQL)}</pre>
+            </div>
+        `
+        : '';
+
+    const skillBreakdownHtml = summary.bySkill.length > 0
+        ? summary.bySkill.map((s) => `<span class="tag tag-round">${escapeHtml(s.label)}: <strong>${s.count}</strong></span>`).join('')
+        : '<span class="section-sub">Chưa có VĐV đăng ký nào.</span>';
+
+    const skillOptionsHtml = SKILL_LEVEL_OPTIONS.map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join('');
+
+    const rowsHtml = filteredRegs.map((r, idx) => {
+        const st = r.status || 'pending';
+        const statusBtn = st === 'approved'
+            ? `<button type="button" class="tag tag-status-completed" style="border:1px solid rgba(14,124,91,0.3);cursor:pointer;" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="pending" title="Bấm để chuyển lại Chờ duyệt">✓ Đã duyệt</button>`
+            : `<button type="button" class="tag tag-status-upcoming" style="border:1px solid var(--line);cursor:pointer;" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="approved" title="Bấm để duyệt VĐV này vào danh sách chính">Chờ duyệt</button>`;
+
+        return `
+            <tr>
+                <td class="tabular" style="color:var(--muted);">${idx + 1}</td>
+                <td class="col-left"><strong>${escapeHtml(r.full_name)}</strong></td>
+                <td class="col-left"><span style="color:var(--primary);font-weight:750;">${escapeHtml(r.display_name || r.full_name)}</span></td>
+                <td class="col-left"><span class="tag tag-round">${escapeHtml(r.skill_level)}</span></td>
+                <td class="tabular" style="font-size:12px;color:var(--muted);">${escapeHtml(formatRegDate(r.created_at))}</td>
+                <td>${statusBtn}</td>
+                <td>
+                    <button type="button" class="btn btn-danger btn-sm" style="padding:4px 10px;" data-action="delete-registration" data-reg-id="${escapeHtml(r.id)}" title="Xóa phiếu này">Xóa</button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    return `
+        <div>
+            <div class="reg-admin-share-card">
+                <div style="flex:1;min-width:260px;">
+                    <div style="font-size:13px;font-weight:800;color:var(--ink);margin-bottom:4px;">Link Form Đăng Ký (kiểu Google Form — ẩn hoàn toàn với người xem thường)</div>
+                    <div class="section-sub" style="margin-bottom:8px;">Copy gửi link này cho VĐV điền trước giải. User gửi đơn xong không xem được danh sách của người khác.</div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                        <input id="admin-register-link-input" type="text" readonly class="form-input" style="flex:1;min-width:220px;font-size:13px;" value="${escapeHtml(registerUrl)}">
+                        <button type="button" class="btn btn-primary btn-sm" data-action="copy-register-link">📋 Copy Link Form</button>
+                        <a href="${escapeHtml(registerUrl)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="text-decoration:none;">↗ Mở thử Form</a>
+                    </div>
+                </div>
+
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
+                    <span class="pill-status ${config.registrationOpen ? 'pill-live' : 'pill-completed'}">${config.registrationOpen ? 'Form đang MỞ nhận đơn' : 'Form đã ĐÓNG'}</span>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-registration-open">
+                        ${config.registrationOpen ? '🔒 Tạm đóng Form' : '🔓 Mở lại Form'}
+                    </button>
+                </div>
+            </div>
+
+            ${missingTableBanner}
+
+            <div class="reg-summary-grid">
+                <div class="reg-summary-cell">
+                    <span class="reg-sum-lbl">Tổng đăng ký</span>
+                    <strong class="reg-sum-val tabular">${summary.total}</strong>
+                </div>
+                <div class="reg-summary-cell">
+                    <span class="reg-sum-lbl">Đã duyệt</span>
+                    <strong class="reg-sum-val tabular" style="color:var(--primary);">${summary.approved}</strong>
+                </div>
+                <div class="reg-summary-cell">
+                    <span class="reg-sum-lbl">Chờ duyệt</span>
+                    <strong class="reg-sum-val tabular" style="color:var(--gold);">${summary.pending}</strong>
+                </div>
+                <div class="reg-summary-cell wide">
+                    <span class="reg-sum-lbl">Thống kê từ Bậc thầy lão luyện xuống Mầm non tập sự (thủ công quay cặp &amp; chia đội sau)</span>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">${skillBreakdownHtml}</div>
+                </div>
+            </div>
+
+            <div class="filter-bar" style="margin-bottom:14px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <input id="admin-reg-search" type="search" class="form-input" style="width:240px;" data-action="reg-filter-query" value="${escapeHtml(adminState.regQuery || '')}" placeholder="Tìm họ tên, tên thi đấu, level...">
+                    <select class="select-clean" data-action="reg-filter-status" aria-label="Lọc trạng thái đơn">
+                        <option value="all" ${regStatusFilter === 'all' ? 'selected' : ''}>Tất cả (${summary.total})</option>
+                        <option value="pending" ${regStatusFilter === 'pending' ? 'selected' : ''}>Chờ duyệt (${summary.pending})</option>
+                        <option value="approved" ${regStatusFilter === 'approved' ? 'selected' : ''}>Đã duyệt (${summary.approved})</option>
+                    </select>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="refresh-registrations">↻ Tải lại</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-action="export-registrations-csv" ${regs.length === 0 ? 'disabled' : ''}>⬇ Xuất CSV</button>
+                </div>
+            </div>
+
+            <details class="reg-manual-details" style="margin-bottom:14px;">
+                <summary>+ Admin thêm VĐV thủ công vào danh sách</summary>
+                <form id="admin-add-registration-form" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:10px;padding-top:12px;">
+                    <div>
+                        <label class="form-label">Họ và tên *</label>
+                        <input name="full_name" class="form-input" required maxlength="80" placeholder="Nguyễn Văn A">
+                    </div>
+                    <div>
+                        <label class="form-label">Tên thi đấu</label>
+                        <input name="display_name" class="form-input" maxlength="40" placeholder="Để trống nếu trùng">
+                    </div>
+                    <div>
+                        <label class="form-label">Trình độ *</label>
+                        <select name="skill_level" class="form-select" required>
+                            ${skillOptionsHtml}
+                        </select>
+                    </div>
+                    <div style="display:flex;align-items:flex-end;">
+                        <button type="submit" class="btn btn-primary btn-sm" style="width:100%;height:39px;">Thêm vào danh sách</button>
+                    </div>
+                </form>
+            </details>
+
+            <div class="card">
+                <div class="table-wrap">
+                    <table class="standings-table">
+                        <thead>
+                            <tr>
+                                <th style="width:44px;">#</th>
+                                <th class="col-left">Họ và tên</th>
+                                <th class="col-left">Tên thi đấu</th>
+                                <th class="col-left">Trình độ (Lv3 → Lv1)</th>
+                                <th style="width:108px;">Thời gian</th>
+                                <th style="width:100px;">Trạng thái</th>
+                                <th style="width:66px;"></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rowsHtml || '<tr><td colspan="7" style="padding:26px;color:var(--muted);">Chưa có VĐV nào đăng ký hoặc không khớp bộ lọc.</td></tr>'}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 export function renderAdminTab(state, adminState, storeMode) {
     if (state.isUninitialized) {
         return `
             <div class="admin-shell card-pad">
                 <h2 style="margin-top:0;">Supabase đã kết nối — Chưa có dữ liệu giải đấu</h2>
-                <p class="section-sub">Bấm nút bên dưới để tạo cấu trúc giải mẫu 4 đội × 3 cặp theo thể thức Team League (Fixed Lineup) lên Supabase.</p>
+                <p class="section-sub">Bấm nút bên dưới để tạo cấu trúc giải mẫu 6 đội × 3 cặp theo thể thức Team League (Fixed Lineup) lên Supabase.</p>
                 <button type="button" class="btn btn-primary" data-action="reset-demo">Khởi tạo Giải mẫu trên Supabase</button>
             </div>
         `;
     }
 
     const subtab = adminState.subtab || 'scores';
+    const regCount = Array.isArray(adminState.registrations) ? adminState.registrations.length : 0;
 
     let bodyHtml = '';
     if (subtab === 'scores') bodyHtml = renderScoreOperatorSubtab(state, adminState);
+    else if (subtab === 'registrations') bodyHtml = renderRegistrationsSubtab(state, adminState, storeMode);
     else if (subtab === 'teams') bodyHtml = renderTeamsEditorSubtab(state);
     else if (subtab === 'schedule') bodyHtml = renderScheduleEditorSubtab(state);
     else if (subtab === 'settings') bodyHtml = renderSettingsSubtab(state, storeMode);
@@ -726,6 +980,7 @@ export function renderAdminTab(state, adminState, storeMode) {
             <div class="admin-subnav">
                 <div class="admin-subtabs" role="tablist">
                     <button type="button" class="admin-subtab ${subtab === 'scores' ? 'active' : ''}" data-action="admin-subtab" data-subtab="scores">Cập Nhật Tỉ Số</button>
+                    <button type="button" class="admin-subtab ${subtab === 'registrations' ? 'active' : ''}" data-action="admin-subtab" data-subtab="registrations">Đăng Ký VĐV${regCount > 0 ? ` (${regCount})` : ''}</button>
                     <button type="button" class="admin-subtab ${subtab === 'teams' ? 'active' : ''}" data-action="admin-subtab" data-subtab="teams">Đội & Số Đội</button>
                     <button type="button" class="admin-subtab ${subtab === 'schedule' ? 'active' : ''}" data-action="admin-subtab" data-subtab="schedule">Lịch Thi Đấu</button>
                     <button type="button" class="admin-subtab ${subtab === 'settings' ? 'active' : ''}" data-action="admin-subtab" data-subtab="settings">Cài Đặt & Backup</button>

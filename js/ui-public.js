@@ -1,4 +1,6 @@
 import {
+    SKILL_LEVEL_OPTIONS,
+    anonymizeAwardsLeaderboards,
     calculatePairLeaderboard,
     calculatePairStats,
     calculatePlayerLeaderboard,
@@ -408,7 +410,7 @@ export function renderLiveSpotlight(state, isAdmin, compact = true) {
     `;
 }
 
-export function renderStandingsTab(state, isAdmin) {
+export function renderStandingsTab(state, isAdmin, maskSeed = null) {
     const config = normalizeConfig(state.tournament?.config);
     const standings = calculateStandings(state.teams, state.teamMatches, state.subMatches, config);
     const teamsMap = new Map((state.teams || []).map((t) => [t.id, t]));
@@ -480,12 +482,24 @@ export function renderStandingsTab(state, isAdmin) {
         `
         : '';
 
-    const pairTop = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config)[0];
-    const playerStats = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
-    const scorerTop = playerStats.byPoints[0];
-    const errorTop = playerStats.byErrors[0];
-
-    const awardsPreview = renderAwardsCardsHtml(pairTop, scorerTop, errorTop, true);
+    const showAwardsPreview = isAdmin || config.awardsVisibility !== 'hidden';
+    let awardsPreview = '';
+    if (showAwardsPreview) {
+        let previewPairs = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+        let previewPlayerStats = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+        if (!isAdmin && config.awardsVisibility === 'anonymous') {
+            const resolvedSeed = Number.isFinite(Number(maskSeed)) && Number(maskSeed) >= 1
+                ? Math.floor(Number(maskSeed))
+                : config.awardsMaskSeed;
+            const masked = anonymizeAwardsLeaderboards(previewPairs, previewPlayerStats, resolvedSeed);
+            previewPairs = masked.pairRows;
+            previewPlayerStats = masked.playerBoard;
+        }
+        const pairTop = previewPairs[0];
+        const scorerTop = previewPlayerStats.byPoints[0];
+        const errorTop = previewPlayerStats.byErrors[0];
+        awardsPreview = renderAwardsCardsHtml(pairTop, scorerTop, errorTop, true);
+    }
 
     return `
         <section class="section-block">
@@ -528,13 +542,30 @@ export function renderStandingsTab(state, isAdmin) {
     `;
 }
 
+function renderTeamMetaHtml(team, labelText, isTable = false) {
+    if (team?.id === 'anon') {
+        return '<span class="team-code-dot sm" style="background:#64748b">?</span>';
+    }
+    if (isTable) {
+        return `
+            <div class="table-team-cell">
+                <span class="team-code-dot sm" style="background:${escapeHtml(team.color)}">${escapeHtml(team.code)}</span>
+                <span>${escapeHtml(labelText)}</span>
+            </div>
+        `;
+    }
+    return `
+        <span class="team-code-dot sm" style="background:${escapeHtml(team.color)}">${escapeHtml(team.code)}</span>
+        <span>${escapeHtml(labelText)}</span>
+    `;
+}
+
 function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = false) {
     const pairContent = pairTop && pairTop.played > 0
         ? `
             <div class="award-winner-name">${escapeHtml(pairTop.playersText)}</div>
             <div class="award-meta">
-                <span class="team-code-dot sm" style="background:${escapeHtml(pairTop.team.color)}">${escapeHtml(pairTop.team.code)}</span>
-                <span>${escapeHtml(pairTop.team.name)} · ${escapeHtml(pairTop.levelName)}</span>
+                ${renderTeamMetaHtml(pairTop.team, `${pairTop.team.name} · ${pairTop.levelName}`)}
             </div>
             <div class="award-stat-row tabular">
                 <strong>${pairTop.wins} thắng - ${pairTop.losses} thua</strong>
@@ -547,8 +578,7 @@ function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = fal
         ? `
             <div class="award-winner-name">${escapeHtml(scorerTop.name)}</div>
             <div class="award-meta">
-                <span class="team-code-dot sm" style="background:${escapeHtml(scorerTop.team.color)}">${escapeHtml(scorerTop.team.code)}</span>
-                <span>${escapeHtml(scorerTop.team.name)} (${escapeHtml(scorerTop.pairLabel || '-')})</span>
+                ${renderTeamMetaHtml(scorerTop.team, `${scorerTop.team.name} (${scorerTop.pairLabel || '-'})`)}
             </div>
             <div class="award-stat-row tabular">
                 <strong>${scorerTop.totalPoints} điểm</strong>
@@ -561,8 +591,7 @@ function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = fal
         ? `
             <div class="award-winner-name">${escapeHtml(errorTop.name)}</div>
             <div class="award-meta">
-                <span class="team-code-dot sm" style="background:${escapeHtml(errorTop.team.color)}">${escapeHtml(errorTop.team.code)}</span>
-                <span>${escapeHtml(errorTop.team.name)} (${escapeHtml(errorTop.pairLabel || '-')})</span>
+                ${renderTeamMetaHtml(errorTop.team, `${errorTop.team.name} (${errorTop.pairLabel || '-'})`)}
             </div>
             <div class="award-stat-row tabular">
                 <strong>${errorTop.totalErrors} lần Out/Lưới</strong>
@@ -575,8 +604,8 @@ function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = fal
         ? `
             <div class="section-header" style="margin-top:34px;">
                 <div>
-                    <h2 class="section-title">Giải Phụ &amp; Thống Kê Cá Nhân</h2>
-                    <span class="section-sub">Tổng hợp tất cả các trận · Chốt danh hiệu cuối giải</span>
+                    <h2 class="section-title">Bảng Vinh Danh &amp; Thống Kê Cá Nhân</h2>
+                    <span class="section-sub">Tổng hợp tất cả các trận · Vinh danh thành tích cuối giải</span>
                 </div>
                 <button type="button" class="link-btn" data-action="switch-tab" data-tab="awards">Xem Bảng Point &amp; Chi tiết &rarr;</button>
             </div>
@@ -605,13 +634,37 @@ function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = fal
     `;
 }
 
-export function renderAwardsTab(state, filters = {}) {
+export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed = null) {
     const config = normalizeConfig(state.tournament?.config);
-    const teams = [...(state.teams || [])].sort((a, b) => (a.seed_order ?? 0) - (b.seed_order ?? 0));
-    const pairRowsAll = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
-    const playerBoard = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+    const awardsMode = config.awardsVisibility || 'public';
 
-    const teamFilter = filters.teamId || 'all';
+    if (!isAdmin && awardsMode === 'hidden') {
+        return `
+            <section class="section-block">
+                <div class="card anon-locked-card">
+                    <div class="anon-locked-icon">🔒</div>
+                    <h2 class="section-title" style="margin:0 0 8px;">Bảng Vinh Danh &amp; Point Cá Nhân đang tạm ẩn</h2>
+                    <p class="section-sub" style="margin:0;">Ban tổ chức đang tạm thời ẩn danh sách cặp đôi và điểm cá nhân. Bạn vẫn có thể theo dõi Bảng Xếp Hạng Đội, Lịch &amp; Kết Quả và Đội Hình bình thường.</p>
+                </div>
+            </section>
+        `;
+    }
+
+    const teams = [...(state.teams || [])].sort((a, b) => (a.seed_order ?? 0) - (b.seed_order ?? 0));
+    const rawPairRows = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+    const rawPlayerBoard = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
+
+    const isAnonView = !isAdmin && awardsMode === 'anonymous';
+    const resolvedSeed = Number.isFinite(Number(maskSeed)) && Number(maskSeed) >= 1
+        ? Math.floor(Number(maskSeed))
+        : config.awardsMaskSeed;
+    const maskedData = isAnonView
+        ? anonymizeAwardsLeaderboards(rawPairRows, rawPlayerBoard, resolvedSeed)
+        : null;
+    const pairRowsAll = maskedData ? maskedData.pairRows : rawPairRows;
+    const playerBoard = maskedData ? maskedData.playerBoard : rawPlayerBoard;
+
+    const teamFilter = isAnonView ? 'all' : (filters.teamId || 'all');
     const queryNorm = normalizeQuery(filters.query || '');
 
     const filterPair = (r) => {
@@ -631,22 +684,22 @@ export function renderAwardsTab(state, filters = {}) {
         return true;
     };
 
-    const filteredPairs = pairRowsAll.filter(filterPair);
-    const filteredPoints = playerBoard.byPoints.filter(filterPlayer);
-    const filteredErrors = playerBoard.byErrors.filter(filterPlayer);
+    const filteredPairs = isAnonView ? pairRowsAll : pairRowsAll.filter(filterPair);
+    const filteredPoints = isAnonView ? playerBoard.byPoints : playerBoard.byPoints.filter(filterPlayer);
+    const filteredErrors = isAnonView ? playerBoard.byErrors : playerBoard.byErrors.filter(filterPlayer);
+    const teamColClassAttr = isAnonView ? '' : ' class="col-left"';
 
     const pairTableRows = filteredPairs.map((r) => {
         const diffCls = r.pointDiff > 0 ? 'diff-pos' : (r.pointDiff < 0 ? 'diff-neg' : 'diff-zero');
-        const winnerBadge = r.rank === 1 && r.played > 0 ? '<span class="award-inline-badge">Cặp ăn ý #1</span>' : '';
+        const winnerBadge = r.rank === 1 && r.played > 0 ? '<span class="award-inline-badge">Cặp đôi ăn ý #1</span>' : '';
         return `
             <tr>
                 <td><span class="rank-pill ${r.rank <= 3 ? `rank-${r.rank}` : ''}">${r.rank}</span></td>
                 <td class="col-left">
-                    <strong>${escapeHtml(r.playersText)}</strong> ${winnerBadge}
+                    <div class="table-pair-cell"><strong>${escapeHtml(r.playersText)}</strong>${winnerBadge}</div>
                 </td>
-                <td class="col-left">
-                    <span class="team-code-dot sm" style="background:${escapeHtml(r.team.color)}">${escapeHtml(r.team.code)}</span>
-                    <span style="margin-left:6px;">${escapeHtml(r.team.name)} · ${escapeHtml(r.levelName)}</span>
+                <td${teamColClassAttr}>
+                    ${renderTeamMetaHtml(r.team, `${r.team.name} · ${r.levelName}`, true)}
                 </td>
                 <td class="tabular">${r.played}</td>
                 <td class="tabular"><strong>${r.wins}W</strong> - ${r.losses}L</td>
@@ -663,9 +716,11 @@ export function renderAwardsTab(state, filters = {}) {
             const val = log[metricKey];
             const cls = metricKey === 'points' ? 'pts' : 'errs';
             const prefix = metricKey === 'points' ? `+${val}đ` : `${val} lỗi`;
+            const titleText = log.scoreSummary ? `${log.roundName} (${log.scoreSummary})` : log.roundName;
+            const labelText = log.opponentLabel ? `${log.roundName} vs ${log.opponentLabel}:` : `${log.roundName}:`;
             return `
-                <span class="match-log-pill ${cls}" title="${escapeHtml(log.roundName)} (${escapeHtml(log.scoreSummary)})">
-                    <span>${escapeHtml(log.roundName)} vs ${escapeHtml(log.opponentLabel)}:</span>
+                <span class="match-log-pill ${cls}" title="${escapeHtml(titleText)}">
+                    <span>${escapeHtml(labelText)}</span>
                     <strong>${prefix}</strong>
                 </span>
             `;
@@ -674,36 +729,40 @@ export function renderAwardsTab(state, filters = {}) {
 
     const pointsRows = filteredPoints.map((p) => {
         const badge = p.rank === 1 && p.totalPoints > 0 ? '<span class="award-inline-badge pts">Top Scorer</span>' : '';
+        const detailCol = isAnonView
+            ? ''
+            : `<td class="col-left match-log-cell"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'points')}</div></td>`;
         return `
             <tr>
                 <td><span class="rank-pill ${p.rank <= 3 ? `rank-${p.rank}` : ''}">${p.rank}</span></td>
-                <td class="col-left"><strong>${escapeHtml(p.name)}</strong> ${badge}</td>
-                <td class="col-left">
-                    <span class="team-code-dot sm" style="background:${escapeHtml(p.team.color)}">${escapeHtml(p.team.code)}</span>
-                    <span style="margin-left:6px;">${escapeHtml(p.team.code)} · ${escapeHtml(p.pairLabel || '-')}</span>
+                <td class="col-left"><div class="table-pair-cell"><strong>${escapeHtml(p.name)}</strong>${badge}</div></td>
+                <td${teamColClassAttr}>
+                    ${renderTeamMetaHtml(p.team, `${p.team.code} · ${p.pairLabel || '-'}`, true)}
                 </td>
                 <td class="tabular">${p.matchesPlayed}</td>
                 <td class="tabular"><span class="stat-highlight">${p.totalPoints}</span></td>
                 <td class="tabular">${p.avgPoints}</td>
-                <td class="col-left"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'points')}</div></td>
+                ${detailCol}
             </tr>
         `;
     }).join('');
 
     const errorsRows = filteredErrors.map((p) => {
         const badge = p.rank === 1 && p.totalErrors > 0 ? '<span class="award-inline-badge errs">Nhiều Out nhất</span>' : '';
+        const detailCol = isAnonView
+            ? ''
+            : `<td class="col-left match-log-cell"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'errors')}</div></td>`;
         return `
             <tr>
                 <td><span class="rank-pill ${p.rank === 1 ? 'rank-err' : ''}">${p.rank}</span></td>
-                <td class="col-left"><strong>${escapeHtml(p.name)}</strong> ${badge}</td>
-                <td class="col-left">
-                    <span class="team-code-dot sm" style="background:${escapeHtml(p.team.color)}">${escapeHtml(p.team.code)}</span>
-                    <span style="margin-left:6px;">${escapeHtml(p.team.code)} · ${escapeHtml(p.pairLabel || '-')}</span>
+                <td class="col-left"><div class="table-pair-cell"><strong>${escapeHtml(p.name)}</strong>${badge}</div></td>
+                <td${teamColClassAttr}>
+                    ${renderTeamMetaHtml(p.team, `${p.team.code} · ${p.pairLabel || '-'}`, true)}
                 </td>
                 <td class="tabular">${p.matchesPlayed}</td>
                 <td class="tabular"><strong style="color:var(--crimson);font-size:16px;">${p.totalErrors}</strong></td>
                 <td class="tabular">${p.avgErrors}</td>
-                <td class="col-left"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'errors')}</div></td>
+                ${detailCol}
             </tr>
         `;
     }).join('');
@@ -713,17 +772,29 @@ export function renderAwardsTab(state, filters = {}) {
         .join('');
     const searchIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
 
-    return `
-        <section class="section-block">
-            <div class="section-header">
-                <div>
-                    <h2 class="section-title">Giải Phụ Cặp Đôi &amp; Bảng Point Cá Nhân</h2>
-                    <span class="section-sub">Tổng hợp tất cả các trận trong giải (vòng tròn + playoff) và chốt giải ở trận cuối</span>
+    const adminControlsBar = isAdmin
+        ? `
+            <div class="admin-awards-bar">
+                <div class="admin-awards-status">
+                    <strong>Chế độ hiển thị công khai (Người xem):</strong>
+                    <span>${awardsMode === 'public'
+            ? '👁 Đang công khai tên thật.'
+            : (awardsMode === 'anonymous'
+                ? '🕶 Đang ẩn danh bằng mã 3 số (tự random mới mỗi lần người xem mở trang; Admin vẫn thấy tên thật).'
+                : '🔒 Đang ẩn hoàn toàn khỏi người xem (chỉ Admin xem được trang này).')}</span>
+                </div>
+                <div class="admin-awards-actions">
+                    <button type="button" class="mode-pill-btn ${awardsMode === 'public' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="public">👁 Công khai</button>
+                    <button type="button" class="mode-pill-btn ${awardsMode === 'anonymous' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="anonymous">🕶 Ẩn danh tên</button>
+                    <button type="button" class="mode-pill-btn ${awardsMode === 'hidden' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="hidden">🔒 Ẩn hoàn toàn</button>
                 </div>
             </div>
+        `
+        : '';
 
-            ${renderAwardsCardsHtml(pairRowsAll[0], playerBoard.byPoints[0], playerBoard.byErrors[0], false)}
-
+    const filterOrNoticeBar = isAnonView
+        ? ''
+        : `
             <div class="filter-bar" style="margin-top:22px;">
                 <div class="search-input-wrap">
                     ${searchIcon}
@@ -734,6 +805,26 @@ export function renderAwardsTab(state, filters = {}) {
                     ${teamSelectOptions}
                 </select>
             </div>
+        `;
+
+    const detailHeadPoints = isAnonView ? '' : '<th class="col-left">Chi Tiết Điểm Sau Mỗi Trận</th>';
+    const detailHeadErrors = isAnonView ? '' : '<th class="col-left">Chi Tiết Từng Trận</th>';
+    const playerTableColspan = isAnonView ? '6' : '7';
+
+    return `
+        <section class="section-block">
+            <div class="section-header">
+                <div>
+                    <h2 class="section-title">Bảng Vinh Danh &amp; Point Cá Nhân</h2>
+                    <span class="section-sub">Tổng hợp tất cả các trận trong giải (vòng tròn + playoff) · Vinh danh thành tích cuối giải</span>
+                </div>
+            </div>
+
+            ${adminControlsBar}
+
+            ${renderAwardsCardsHtml(pairRowsAll[0], playerBoard.byPoints[0], playerBoard.byErrors[0], false)}
+
+            ${filterOrNoticeBar}
 
             <div class="section-header" style="margin-top:18px;">
                 <h3 class="section-title" style="font-size:19px;">1. BXH Cặp Đôi Ăn Ý</h3>
@@ -746,7 +837,7 @@ export function renderAwardsTab(state, filters = {}) {
                             <tr>
                                 <th style="width:54px;">#</th>
                                 <th class="col-left">Cặp Đôi</th>
-                                <th class="col-left">Đội &amp; Level</th>
+                                <th${teamColClassAttr}>Đội &amp; Level</th>
                                 <th>Đã đấu</th>
                                 <th>Thắng - Thua</th>
                                 <th>Set</th>
@@ -772,15 +863,15 @@ export function renderAwardsTab(state, filters = {}) {
                             <tr>
                                 <th style="width:54px;">#</th>
                                 <th class="col-left">VĐV</th>
-                                <th class="col-left">Đội · Cặp</th>
+                                <th${teamColClassAttr}>Đội · Cặp</th>
                                 <th>Trận</th>
                                 <th>Tổng Điểm</th>
                                 <th>TB/Trận</th>
-                                <th class="col-left">Chi Tiết Điểm Sau Mỗi Trận</th>
+                                ${detailHeadPoints}
                             </tr>
                         </thead>
                         <tbody>
-                            ${pointsRows || '<tr><td colspan="7" style="padding:24px;color:var(--muted);">Chưa có điểm cá nhân nào được ghi nhận.</td></tr>'}
+                            ${pointsRows || `<tr><td colspan="${playerTableColspan}" style="padding:24px;color:var(--muted);">Chưa có điểm cá nhân nào được ghi nhận.</td></tr>`}
                         </tbody>
                     </table>
                 </div>
@@ -797,15 +888,15 @@ export function renderAwardsTab(state, filters = {}) {
                             <tr>
                                 <th style="width:54px;">#</th>
                                 <th class="col-left">VĐV</th>
-                                <th class="col-left">Đội · Cặp</th>
+                                <th${teamColClassAttr}>Đội · Cặp</th>
                                 <th>Trận</th>
                                 <th>Tổng Out/Lưới</th>
                                 <th>TB/Trận</th>
-                                <th class="col-left">Chi Tiết Từng Trận</th>
+                                ${detailHeadErrors}
                             </tr>
                         </thead>
                         <tbody>
-                            ${errorsRows || '<tr><td colspan="7" style="padding:24px;color:var(--muted);">Chưa có thống kê đánh Out / Lưới.</td></tr>'}
+                            ${errorsRows || `<tr><td colspan="${playerTableColspan}" style="padding:24px;color:var(--muted);">Chưa có thống kê đánh Out / Lưới.</td></tr>`}
                         </tbody>
                     </table>
                 </div>
@@ -1255,5 +1346,108 @@ export function renderTeamDetailModal(teamId, state) {
                 </div>
             </div>
         </div>
+    `;
+}
+
+/**
+ * Google-Form-style standalone pre-registration page rendered only via ?register=1.
+ * Keeps submitted lists strictly hidden from public/anonymous visitors.
+ */
+export function renderRegisterPage(tournament, options = {}) {
+    const config = normalizeConfig(tournament?.config);
+    const title = tournament?.name || 'VaciF PickleBeer 2026 Team League';
+    const {
+        submittedReceipt = null,
+        errorMessage = '',
+        submitting = false
+    } = options;
+
+    const headerCardHtml = `
+        <div class="reg-card reg-header-card">
+            <div class="reg-banner-strip"></div>
+            <div class="reg-header-body">
+                <div class="eyebrow" style="margin-bottom:8px;">
+                    <span>VACIF · PICKLEBEER 2026</span>
+                    <span class="pill-status ${config.registrationOpen ? 'pill-live' : 'pill-completed'}">${config.registrationOpen ? 'Đang mở đăng ký' : 'Đã đóng đăng ký'}</span>
+                </div>
+                <h1 class="reg-title">Đăng Ký Tham Gia Giải</h1>
+                <p class="reg-desc">
+                    <strong>${escapeHtml(title)}</strong> — Thông tin đăng ký để BTC ghi nhận số lượng tham gia và tiến hành quay cặp đấu, phân đội theo từng trình độ (từ Bậc thầy lão luyện đến Mầm non tập sự).
+                </p>
+                <div class="reg-required-note"><span class="reg-req">*</span> Biểu thị câu hỏi bắt buộc</div>
+            </div>
+        </div>
+    `;
+
+    if (!config.registrationOpen) {
+        return `
+            <section class="reg-shell">
+                ${headerCardHtml}
+                <div class="reg-card reg-q-card">
+                    <h2 style="margin:0 0 8px;font-size:18px;">Biểu mẫu đăng ký đã tạm đóng</h2>
+                    <p class="section-sub" style="margin:0;">
+                        BTC đã ngừng nhận đơn đăng ký cho giải đấu này. Vui lòng liên hệ trực tiếp BTC nếu cần bổ sung danh sách.
+                    </p>
+                </div>
+            </section>
+        `;
+    }
+
+    if (submittedReceipt) {
+        return `
+            <section class="reg-shell">
+                ${headerCardHtml}
+                <div class="reg-card reg-q-card reg-success-card">
+                    <div class="reg-success-badge">✓ Đã ghi nhận đăng ký</div>
+                    <h2 style="margin:8px 0 6px;font-size:20px;">Cảm ơn bạn đã đăng ký!</h2>
+                    <p class="section-sub" style="margin:0 0 16px;">
+                        Thông tin của bạn đã được ghi nhận để BTC thống kê số lượng, quay cặp đấu và phân đội theo Level.
+                    </p>
+                    <div class="reg-receipt-box">
+                        <div class="reg-receipt-row"><span>Họ và tên</span><strong>${escapeHtml(submittedReceipt.full_name)}</strong></div>
+                        <div class="reg-receipt-row"><span>Tên thi đấu</span><strong>${escapeHtml(submittedReceipt.display_name || submittedReceipt.full_name)}</strong></div>
+                        <div class="reg-receipt-row"><span>Trình độ (Tự đánh giá)</span><strong>${escapeHtml(submittedReceipt.skill_level)}</strong></div>
+                    </div>
+                </div>
+            </section>
+        `;
+    }
+
+    const skillRadiosHtml = SKILL_LEVEL_OPTIONS.map((opt, idx) => `
+        <label class="reg-radio-item">
+            <input type="radio" name="skill_level" value="${escapeHtml(opt)}" ${idx === 0 ? 'required' : ''}>
+            <span>${escapeHtml(opt)}</span>
+        </label>
+    `).join('');
+
+    return `
+        <section class="reg-shell">
+            ${headerCardHtml}
+            <form id="player-registration-form" class="reg-form-stack">
+                ${errorMessage ? `<div class="alert alert-error">${escapeHtml(errorMessage)}</div>` : ''}
+
+                <div class="reg-card reg-q-card">
+                    <label class="reg-q-label" for="reg-full-name">Họ và tên <span class="reg-req">*</span></label>
+                    <input id="reg-full-name" name="full_name" type="text" class="form-input" required maxlength="80" placeholder="" autocomplete="name">
+                </div>
+
+                <div class="reg-card reg-q-card">
+                    <label class="reg-q-label" for="reg-display-name">Tên thi đấu</label>
+                    <input id="reg-display-name" name="display_name" type="text" class="form-input" maxlength="40" placeholder="">
+                </div>
+
+                <div class="reg-card reg-q-card">
+                    <div class="reg-q-label">Trình độ (Tự đánh giá) <span class="reg-req">*</span></div>
+                    <div class="reg-radio-list">
+                        ${skillRadiosHtml}
+                    </div>
+                </div>
+
+                <div class="reg-submit-bar">
+                    <button type="submit" class="btn btn-primary reg-submit-btn" ${submitting ? 'disabled' : ''}>${submitting ? 'Đang gửi...' : 'Đăng Ký'}</button>
+                    <button type="reset" class="link-btn" data-action="reset-register-form">Xóa hết câu trả lời</button>
+                </div>
+            </form>
+        </section>
     `;
 }

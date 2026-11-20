@@ -1,8 +1,8 @@
 import { APP_CONFIG } from './config.js';
 import { createInitialDemoState } from './demo-data.js';
-import { normalizeConfig } from './tournament-engine.js';
+import { normalizeConfig, sanitizeRegistrationPayload } from './tournament-engine.js';
 
-const STORAGE_KEY_PREFIX = 'pickleball_team_league_v1_';
+const STORAGE_KEY_PREFIX = 'pickleball_team_league_v2_';
 const SESSION_ADMIN_KEY = 'pickleball_team_league_local_admin_v1';
 const BROADCAST_CHANNEL_NAME = 'pickleball_team_league_sync_v1';
 
@@ -26,7 +26,8 @@ function normalizeState(raw, tournamentId) {
         teams: Array.isArray(raw?.teams) ? raw.teams : [],
         teamPairs: Array.isArray(raw?.teamPairs) ? raw.teamPairs : [],
         teamMatches: Array.isArray(raw?.teamMatches) ? raw.teamMatches : [],
-        subMatches: Array.isArray(raw?.subMatches) ? raw.subMatches : []
+        subMatches: Array.isArray(raw?.subMatches) ? raw.subMatches : [],
+        registrations: Array.isArray(raw?.registrations) ? raw.registrations : []
     };
 }
 
@@ -265,6 +266,49 @@ class LocalStore {
     async importFullState(rawState) {
         const normalized = normalizeState(rawState, this.tournamentId);
         return this._write(normalized);
+    }
+
+    async submitRegistration(rawForm, overrideStatus = 'pending') {
+        const clean = sanitizeRegistrationPayload(rawForm);
+        const state = this._read();
+        if (state.tournament?.config?.registrationOpen === false && overrideStatus !== 'approved') {
+            throw new Error('Biểu mẫu đăng ký hiện đã tạm đóng bởi Ban Tổ Chức.');
+        }
+        const entry = {
+            id: `reg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+            tournament_id: this.tournamentId,
+            ...clean,
+            status: ['pending', 'approved', 'rejected'].includes(overrideStatus) ? overrideStatus : 'pending',
+            created_at: new Date().toISOString()
+        };
+        const currentRegs = Array.isArray(state.registrations) ? state.registrations : [];
+        state.registrations = [entry, ...currentRegs];
+        this._write(state);
+        return { ok: true, entry };
+    }
+
+    async fetchRegistrations() {
+        const state = this._read();
+        return {
+            rows: Array.isArray(state.registrations) ? state.registrations : [],
+            tableMissing: false
+        };
+    }
+
+    async updateRegistration(regId, patch) {
+        const state = this._read();
+        const regs = Array.isArray(state.registrations) ? state.registrations : [];
+        state.registrations = regs.map((r) => (r.id === regId ? { ...r, ...patch } : r));
+        this._write(state);
+        return { rows: state.registrations, tableMissing: false };
+    }
+
+    async deleteRegistration(regId) {
+        const state = this._read();
+        const regs = Array.isArray(state.registrations) ? state.registrations : [];
+        state.registrations = regs.filter((r) => r.id !== regId);
+        this._write(state);
+        return { rows: state.registrations, tableMissing: false };
     }
 }
 
@@ -696,6 +740,65 @@ class SupabaseStore {
         }
 
         return this.fetchState();
+    }
+
+    _isMissingRegistrationsTable(error) {
+        if (!error) return false;
+        const msg = String(error.message || '').toLowerCase();
+        return error.code === '42P01'
+            || error.code === 'PGRST205'
+            || msg.includes('player_registrations') && (msg.includes('does not exist') || msg.includes('schema cache'));
+    }
+
+    async submitRegistration(rawForm, overrideStatus = 'pending') {
+        const clean = sanitizeRegistrationPayload(rawForm);
+        const entry = {
+            id: `reg_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+            tournament_id: this.tournamentId,
+            ...clean,
+            status: ['pending', 'approved', 'rejected'].includes(overrideStatus) ? overrideStatus : 'pending'
+        };
+        // Important: omit .select() so anonymous INSERT succeeds even while SELECT is restricted to Admins by RLS.
+        const { error } = await this.supabase.from('player_registrations').insert(entry);
+        if (error) {
+            if (this._isMissingRegistrationsTable(error)) {
+                throw new Error('Bảng đăng ký chưa được tạo trên Supabase — Admin vui lòng chạy SQL tạo bảng player_registrations.');
+            }
+            throw new Error(`Không thể gửi đăng ký: ${error.message}`);
+        }
+        return { ok: true, entry: { ...entry, created_at: new Date().toISOString() } };
+    }
+
+    async fetchRegistrations() {
+        const { data, error } = await this.supabase
+            .from('player_registrations')
+            .select('*')
+            .eq('tournament_id', this.tournamentId)
+            .order('created_at', { ascending: false });
+
+        if (error) {
+            if (this._isMissingRegistrationsTable(error)) {
+                return { rows: [], tableMissing: true };
+            }
+            throw new Error(`Không thể tải danh sách đăng ký: ${error.message}`);
+        }
+        return { rows: data || [], tableMissing: false };
+    }
+
+    async updateRegistration(regId, patch) {
+        await this._ensureSucceeded(
+            await this.supabase.from('player_registrations').update(patch).eq('id', regId),
+            'Cập nhật đơn đăng ký'
+        );
+        return this.fetchRegistrations();
+    }
+
+    async deleteRegistration(regId) {
+        await this._ensureSucceeded(
+            await this.supabase.from('player_registrations').delete().eq('id', regId),
+            'Xóa đơn đăng ký'
+        );
+        return this.fetchRegistrations();
     }
 }
 

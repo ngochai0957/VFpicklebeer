@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import {
+    AWARDS_VISIBILITY_MODES,
     advanceRallyServeTurn,
+    anonymizeAwardsLeaderboards,
     applyRallyOutcomeToSet,
     buildCourtBoard,
     buildResizedRoster,
@@ -22,7 +24,9 @@ import {
     normalizeSetPlayerStats,
     parseScheduleValue,
     resolveSubMatchSchedule,
+    sanitizeRegistrationPayload,
     selectRallyRole,
+    summarizeRegistrations,
     swapRallyCourtOrder
 } from '../js/tournament-engine.js';
 import { createInitialDemoState } from '../js/demo-data.js';
@@ -30,6 +34,7 @@ import {
     renderAwardsTab,
     renderLiveSpotlight,
     renderMatchesTab,
+    renderRegisterPage,
     renderRulesTab,
     renderStandingsTab,
     renderTeamDetailModal,
@@ -340,8 +345,6 @@ test('Live view hides upcoming pairs, shows ready pairs subdued, and distinguish
     assert.ok(adminHtml.includes('● Đang đấu'));
     assert.ok(adminHtml.includes('✓ Xong'));
     assert.ok(adminHtml.includes('data-action="move-sub-order"'));
-    assert.ok(adminHtml.includes('data-action="sort-subs-by-status"'));
-    assert.ok(adminHtml.includes('data-action="reset-sub-order"'));
 
     // 4. Smart status sorting surfaces live pairs first, and explicit displayOrder overrides order cleanly
     subs[0].status = 'completed';
@@ -416,10 +419,13 @@ test('Supports match date + time scheduling and simultaneous multi-court pair as
     assert.equal(san3.live.length, 1);
     assert.equal(san3.live[0].subLabel, 'Level 3');
 
-    // Admin forms include date pickers + per-pair court/schedule inputs
+    // Admin forms include date pickers + per-pair court/schedule inputs (without quick-court preset clutter)
     const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: liveMatch.id }, 'supabase');
     assert.ok(adminScoresHtml.includes('name="scheduled_date"'));
-    assert.ok(adminScoresHtml.includes('data-action="assign-multi-courts"'));
+    assert.ok(adminScoresHtml.includes('name="note"'));
+    assert.ok(adminScoresHtml.includes('admin-meta-note-field'));
+    assert.equal(adminScoresHtml.includes('data-action="quick-match-court"'), false);
+    assert.equal(adminScoresHtml.includes('data-action="assign-multi-courts"'), false);
     assert.ok(adminScoresHtml.includes('data-action="sub-override-field"'));
     const adminSchedHtml = renderAdminTab(state, { subtab: 'schedule', selectedMatchId: liveMatch.id }, 'supabase');
     assert.ok(adminSchedHtml.includes('name="scheduled_date"'));
@@ -463,12 +469,15 @@ test('Awards leaderboards rank Best Pair, Top Scorer (regardless of win/loss), a
     assert.equal(awardsHtml.includes('<script>xss</script>'), false);
     assert.equal(awardsHtml.includes('admin-edit-match'), false);
     assert.ok(awardsHtml.includes('Cặp Đôi Ăn Ý'));
+    assert.ok(awardsHtml.includes('Cặp đôi ăn ý #1'));
     assert.ok(awardsHtml.includes('Bảng Point Cá Nhân'));
     assert.ok(awardsHtml.includes('Thống Kê Đánh Out'));
     assert.ok(awardsHtml.includes('Tuấn Anh'));
+    assert.equal(awardsHtml.includes('Giải Phụ'), false);
 
     const standingsHtml = renderStandingsTab(state, false);
-    assert.ok(standingsHtml.includes('Giải Phụ &amp; Thống Kê Cá Nhân'));
+    assert.ok(standingsHtml.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'));
+    assert.equal(standingsHtml.includes('Giải Phụ'), false);
 
     const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: 'tm_r1_ab' }, 'local');
     assert.equal(adminScoresHtml.includes('data-action="step-player-stat"'), false);
@@ -601,4 +610,204 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     assert.ok(adminHtml.includes('data-action="reset-set-stats"'));
     assert.ok(adminHtml.includes('Hoàn tác (1)'));
     assert.ok(adminHtml.includes('Phát 2'));
+    assert.ok(adminHtml.includes('set-sticky-scorebar'));
+    assert.equal(adminHtml.includes('set-player-head'), false);
+    // Mobile ergonomic order inside set: sticky Set+Score bar -> scoring buttons -> individual player stats
+    assert.ok(adminHtml.indexOf('set-sticky-scorebar') < adminHtml.indexOf('rally-control-bar'));
+    assert.ok(adminHtml.indexOf('rally-actions-wrap') < adminHtml.indexOf('set-player-cols'));
+});
+
+test('Google-Form-style player registration page and Admin registrations dashboard', () => {
+    const clean = sanitizeRegistrationPayload({
+        full_name: '  Nguyễn Văn Hải  ',
+        display_name: '',
+        skill_level: 'Dui dẻ sương sương'
+    });
+    assert.deepEqual(clean, {
+        full_name: 'Nguyễn Văn Hải',
+        display_name: 'Nguyễn Văn Hải',
+        skill_level: 'Dui dẻ sương sương',
+        preferred_partner: '',
+        avoid_partner: ''
+    });
+
+    assert.throws(() => sanitizeRegistrationPayload({ full_name: ' ', skill_level: 'Dui dẻ sương sương' }));
+    assert.throws(() => sanitizeRegistrationPayload({ full_name: 'Bình', skill_level: '' }));
+
+    const state = createInitialDemoState('main');
+    // Public scoreboard pages never expose registration tabs or private submitted lists
+    const publicMatches = renderMatchesTab(state, { status: 'all', round: 'all', teamId: 'all', query: '' }, false);
+    assert.equal(publicMatches.includes('player-registration-form'), false);
+
+    // Registration page displays 2026 branding, the 3 SKILL_LEVEL_OPTIONS tiers, and omits partner questions
+    const formHtml = renderRegisterPage(state.tournament, {});
+    assert.ok(formHtml.includes('id="player-registration-form"'));
+    assert.ok(formHtml.includes('VACIF · PICKLEBEER 2026'));
+    assert.ok(formHtml.includes('quay cặp đấu, phân đội'));
+    assert.ok(formHtml.includes('Họ và tên'));
+    assert.ok(formHtml.includes('Tên thi đấu'));
+    assert.ok(formHtml.includes('Trình độ (Tự đánh giá)'));
+    assert.ok(formHtml.includes('value="Bậc thầy lão luyện"'));
+    assert.ok(formHtml.includes('value="Dui dẻ sương sương"'));
+    assert.ok(formHtml.includes('value="Mầm non tập sự"'));
+    assert.equal(formHtml.includes('Bạn muốn đánh cặp với ai?'), false);
+    assert.equal(formHtml.includes('Bạn không muốn đánh cặp với ai?'), false);
+
+    const receiptHtml = renderRegisterPage(state.tournament, { submittedReceipt: clean });
+    assert.ok(receiptHtml.includes('✓ Đã ghi nhận đăng ký'));
+    assert.ok(receiptHtml.includes('Nguyễn Văn Hải'));
+
+    const closedHtml = renderRegisterPage({
+        ...state.tournament,
+        config: { ...state.tournament.config, registrationOpen: false }
+    }, {});
+    assert.ok(closedHtml.includes('tạm đóng'));
+    assert.equal(closedHtml.includes('id="player-registration-form"'), false);
+
+    // Admin Registrations stats and table sort descending from 'Bậc thầy lão luyện' down to 'Mầm non tập sự'
+    const sampleRegs = [
+        { full_name: 'Lê Minh', display_name: 'Minh', skill_level: 'Mầm non tập sự', id: 'reg_low', status: 'pending', created_at: '2026-11-19T08:00:00Z' },
+        { ...clean, id: 'reg_1', status: 'pending', created_at: '2026-11-19T08:02:00Z' },
+        { full_name: 'Trần Quốc Bảo', display_name: 'Quốc Bảo', skill_level: 'Bậc thầy lão luyện', id: 'reg_top', status: 'approved', created_at: '2026-11-19T08:05:00Z' }
+    ];
+    const summary = summarizeRegistrations(sampleRegs);
+    assert.equal(summary.total, 3);
+    assert.equal(summary.approved, 1);
+    assert.equal(summary.pending, 2);
+    assert.deepEqual(
+        summary.bySkill.map((s) => s.label),
+        ['Bậc thầy lão luyện', 'Dui dẻ sương sương', 'Mầm non tập sự']
+    );
+    assert.equal(summary.bySkill[0].count, 1);
+    assert.equal(summary.bySkill[1].count, 1);
+    assert.equal(summary.bySkill[2].count, 1);
+
+    const adminRegHtml = renderAdminTab(state, {
+        subtab: 'registrations',
+        registrations: sampleRegs,
+        registrationsTableMissing: true
+    }, 'supabase');
+    assert.ok(adminRegHtml.includes('Đăng Ký VĐV (3)'));
+    assert.ok(adminRegHtml.includes('CREATE TABLE IF NOT EXISTS public.player_registrations'));
+    assert.ok(adminRegHtml.includes('data-action="copy-register-link"'));
+    assert.ok(adminRegHtml.includes('data-action="export-registrations-csv"'));
+    // Row ordering puts Quốc Bảo (Bậc thầy lão luyện) above Nguyễn Văn Hải (Dui dẻ sương sương) above Lê Minh (Mầm non tập sự)
+    assert.ok(adminRegHtml.indexOf('Quốc Bảo') < adminRegHtml.indexOf('Nguyễn Văn Hải'));
+    assert.ok(adminRegHtml.indexOf('Nguyễn Văn Hải') < adminRegHtml.indexOf('Minh'));
+});
+
+test('Awards visibility supports public, anonymous codenames (no leaks), and hidden modes', () => {
+    const state = createInitialDemoState('main');
+    const sm1 = state.subMatches[0];
+    sm1.status = 'completed';
+    sm1.sets = [{ a: 11, b: 6 }, { a: 11, b: 8 }];
+    sm1.winner = 'A';
+    sm1.format_override = {
+        setPlayerStats: [
+            { a1: { points: 7, errors: 1 }, a2: { points: 4, errors: 2 }, b1: { points: 3, errors: 3 }, b2: { points: 3, errors: 2 } },
+            { a1: { points: 8, errors: 0 }, a2: { points: 3, errors: 1 }, b1: { points: 5, errors: 2 }, b2: { points: 3, errors: 1 } }
+        ]
+    };
+
+    const configPublic = normalizeConfig(state.tournament.config);
+    assert.equal(configPublic.awardsVisibility, 'public');
+    assert.deepEqual(AWARDS_VISIBILITY_MODES, ['public', 'anonymous', 'hidden']);
+
+    // Collect every real player name and team name/code to verify zero leakage in masked modes
+    const rawPairs = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, configPublic);
+    const rawPlayers = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, configPublic);
+    const realTeamNames = state.teams.map((t) => t.name);
+    const realPlayerNames = rawPlayers.byPoints.map((p) => p.name);
+    const topPlayer = rawPlayers.byPoints[0];
+    const topPlayerName = topPlayer.name;
+    const topPointsLabel = `${topPlayer.totalPoints} điểm`;
+    const topFirstRoundPts = `+${topPlayer.matchLogs[0].points}đ`;
+
+    // 1. Hidden mode: public viewer cannot see preview on Standings or leaderboard data on Awards
+    const hiddenState = {
+        ...state,
+        tournament: { ...state.tournament, config: { ...state.tournament.config, awardsVisibility: 'hidden' } }
+    };
+    const hiddenStandings = renderStandingsTab(hiddenState, false);
+    assert.equal(hiddenStandings.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'), false);
+    const hiddenAwardsPublic = renderAwardsTab(hiddenState, {}, false);
+    assert.ok(hiddenAwardsPublic.includes('đang tạm ẩn'));
+    assert.equal(hiddenAwardsPublic.includes(topPlayerName), false);
+    assert.equal(hiddenAwardsPublic.includes(topPointsLabel), false);
+
+    // Admin in Hidden mode still sees real names and switcher controls
+    const hiddenAwardsAdmin = renderAwardsTab(hiddenState, {}, true);
+    assert.ok(hiddenAwardsAdmin.includes(topPlayerName));
+    assert.ok(hiddenAwardsAdmin.includes('data-action="set-awards-visibility"'));
+    assert.ok(renderStandingsTab(hiddenState, true).includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'));
+
+    // 2. Anonymous mode: per-session 3-digit codes ("Cặp đôi XXX" / "Cá nhân XXX"), centered "?" team cells, no match details
+    const anonState = {
+        ...state,
+        tournament: {
+            ...state.tournament,
+            config: { ...state.tournament.config, awardsVisibility: 'anonymous', awardsMaskSeed: 7 }
+        }
+    };
+    const anonStandingsPublic = renderStandingsTab(anonState, false, 101);
+    const anonAwardsPublic = renderAwardsTab(anonState, { query: topPlayerName, teamId: state.teams[0].id }, false, 101);
+    const anonAwardsReloaded = renderAwardsTab(anonState, {}, false, 202);
+
+    assert.ok(anonStandingsPublic.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'));
+    assert.ok(anonStandingsPublic.includes(topPointsLabel));
+    assert.ok(anonAwardsPublic.includes('Bảng Vinh Danh &amp; Point Cá Nhân'));
+    assert.ok(anonAwardsPublic.includes('Cặp đôi ăn ý #1'));
+    assert.ok(anonAwardsPublic.includes(String(topPlayer.totalPoints)));
+    assert.ok(anonAwardsPublic.includes('<th>Đội &amp; Level</th>'));
+    assert.ok(anonAwardsPublic.includes('<th>Đội · Cặp</th>'));
+    assert.ok(anonAwardsPublic.includes('<td>\n                    <span class="team-code-dot sm" style="background:#64748b">?</span>'));
+    assert.equal(anonAwardsPublic.includes('<th class="col-left">Đội &amp; Level</th>'), false);
+    assert.equal(anonAwardsPublic.includes('<th class="col-left">Đội · Cặp</th>'), false);
+    assert.equal(anonAwardsPublic.includes('Giải Phụ'), false);
+    assert.equal(anonAwardsPublic.includes('Chế độ Ẩn danh đang bật'), false);
+    assert.equal(anonAwardsPublic.includes('Đội ẩn danh'), false);
+    assert.equal(anonAwardsPublic.includes('Level ẩn danh'), false);
+    assert.equal(anonAwardsPublic.includes('Chi Tiết Điểm Sau Mỗi Trận'), false);
+    assert.equal(anonAwardsPublic.includes('Chi Tiết Từng Trận'), false);
+    assert.equal(anonAwardsPublic.includes(topFirstRoundPts), false);
+    assert.equal(anonAwardsPublic.includes('id="awards-search-input"'), false);
+    assert.equal(anonAwardsPublic.includes('data-action="awards-filter-team"'), false);
+    assert.equal(anonAwardsPublic.includes(`vs ${topPlayer.matchLogs[0].opponentLabel}`), false);
+    assert.equal(anonAwardsPublic.includes(' vs '), false);
+
+    // Admin still gets left-aligned team/level/pair columns with real names and details
+    const anonAwardsAdmin = renderAwardsTab(anonState, {}, true, 101);
+    assert.ok(anonAwardsAdmin.includes('<th class="col-left">Đội &amp; Level</th>'));
+    assert.ok(anonAwardsAdmin.includes('<th class="col-left">Đội · Cặp</th>'));
+    assert.ok(anonAwardsAdmin.includes(topPlayerName));
+
+    for (const realTeam of realTeamNames) {
+        assert.equal(anonAwardsPublic.includes(realTeam), false, `Leaked team name in anonymous awards: ${realTeam}`);
+    }
+    for (const realPlayer of realPlayerNames) {
+        assert.equal(anonAwardsPublic.includes(realPlayer), false, `Leaked player name in anonymous awards: ${realPlayer}`);
+        assert.equal(anonStandingsPublic.includes(realPlayer), false, `Leaked player name in anonymous standings: ${realPlayer}`);
+    }
+
+    // Per-page-load seed consistency between Standings card and Awards tab, uniqueness, and new codes on reload
+    const maskedSeed101 = anonymizeAwardsLeaderboards(rawPairs, rawPlayers, 101);
+    const maskedSeed202 = anonymizeAwardsLeaderboards(rawPairs, rawPlayers, 202);
+    const uniqueNames101 = new Set(maskedSeed101.playerBoard.byPoints.map((p) => p.name));
+    const uniquePairs101 = new Set(maskedSeed101.pairRows.map((r) => r.playersText));
+    assert.equal(uniqueNames101.size, rawPlayers.byPoints.length);
+    assert.equal(uniquePairs101.size, rawPairs.length);
+    assert.match(maskedSeed101.pairRows[0].playersText, /^Cặp đôi \d{3}$/);
+    assert.match(maskedSeed101.playerBoard.byPoints[0].name, /^Cá nhân \d{3}$/);
+    assert.equal(maskedSeed101.pairRows[0].team.name, '?');
+    assert.equal(maskedSeed101.pairRows[0].levelName, '?');
+    assert.equal(maskedSeed101.playerBoard.byPoints[0].pairLabel, '?');
+    assert.deepEqual(maskedSeed101.playerBoard.byPoints[0].matchLogs, []);
+    assert.ok(anonStandingsPublic.includes(maskedSeed101.playerBoard.byPoints[0].name));
+    assert.ok(anonAwardsPublic.includes(maskedSeed101.playerBoard.byPoints[0].name));
+    assert.ok(anonAwardsReloaded.includes(maskedSeed202.playerBoard.byPoints[0].name));
+    assert.notEqual(maskedSeed101.playerBoard.byPoints[0].name, maskedSeed202.playerBoard.byPoints[0].name);
+    assert.notDeepEqual(
+        maskedSeed101.playerBoard.byPoints.map((p) => p.name),
+        maskedSeed202.playerBoard.byPoints.map((p) => p.name)
+    );
 });

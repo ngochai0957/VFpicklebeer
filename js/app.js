@@ -9,6 +9,7 @@ import {
     evaluateSubMatch,
     evaluateTeamMatch,
     generateRoundRobinSchedule,
+    getSkillLevelRank,
     getSubMatchStatusRank,
     normalizeConfig,
     normalizeRallyState,
@@ -17,6 +18,7 @@ import {
     swapRallyCourtOrder
 } from './tournament-engine.js';
 import {
+    REGISTRATION_TABLE_SQL,
     renderAdminLoginModal,
     renderAdminTab
 } from './ui-admin.js';
@@ -24,6 +26,7 @@ import {
     renderAwardsTab,
     renderLiveSpotlight,
     renderMatchesTab,
+    renderRegisterPage,
     renderRulesTab,
     renderStandingsTab,
     renderTeamDetailModal,
@@ -33,12 +36,22 @@ import {
 
 const store = createStore();
 
+function generateSessionMaskSeed() {
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+        const arr = new Uint32Array(1);
+        crypto.getRandomValues(arr);
+        return (arr[0] % 999983) + 1;
+    }
+    return Math.floor(Math.random() * 999983) + 1;
+}
+
 const appState = {
     data: null,
     isAdmin: false,
     adminEmail: null,
     activeTab: 'standings',
     tvMode: false,
+    sessionMaskSeed: generateSessionMaskSeed(),
     teamsQuery: '',
     awardsFilters: {
         teamId: 'all',
@@ -54,7 +67,16 @@ const appState = {
         subtab: 'scores',
         selectedMatchId: null,
         rallyBySet: {},
-        rallyUndoBySet: {}
+        rallyUndoBySet: {},
+        registrations: [],
+        registrationsTableMissing: false,
+        regQuery: '',
+        regStatusFilter: 'all'
+    },
+    registerState: {
+        submitting: false,
+        error: '',
+        submittedReceipt: null
     },
     modal: null,
     loading: true,
@@ -64,6 +86,99 @@ const appState = {
 const pendingSubSaves = new Map();
 const activeSavePromises = new Map();
 let deferredRender = false;
+let lastWindowScrollY = 0;
+let scrollTicking = false;
+
+function syncMobileHeaderHeight() {
+    if (typeof document === 'undefined' || typeof window === 'undefined') return;
+    const navEl = document.getElementById('nav-root');
+    if (navEl && !navEl.classList.contains('hidden')) {
+        const h = navEl.offsetHeight || 70;
+        document.documentElement.style.setProperty('--site-header-h', `${h}px`);
+    }
+    if (window.innerWidth > 900 || window.scrollY <= 36) {
+        document.body.classList.remove('mobile-header-hidden');
+    }
+}
+
+function handleWindowScroll() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    const currentY = Math.max(0, window.scrollY || window.pageYOffset || 0);
+    if (window.innerWidth > 900 || appState.tvMode) {
+        document.body.classList.remove('mobile-header-hidden');
+        lastWindowScrollY = currentY;
+        return;
+    }
+
+    const delta = currentY - lastWindowScrollY;
+    if (currentY <= 36) {
+        document.body.classList.remove('mobile-header-hidden');
+    } else if (delta > 6 && currentY > 72) {
+        document.body.classList.add('mobile-header-hidden');
+    } else if (delta < -6) {
+        document.body.classList.remove('mobile-header-hidden');
+    }
+    lastWindowScrollY = currentY;
+}
+
+function isRegisterPageMode() {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return ['1', 'true', 'yes'].includes((params.get('register') || '').toLowerCase())
+        || params.get('page') === 'register'
+        || window.location.hash === '#register';
+}
+
+async function loadAdminRegistrations({ rerenderAfter = true } = {}) {
+    if (!appState.isAdmin) {
+        appState.adminState.registrations = [];
+        appState.adminState.registrationsTableMissing = false;
+        return;
+    }
+    try {
+        const res = await store.fetchRegistrations();
+        appState.adminState.registrations = Array.isArray(res?.rows) ? res.rows : [];
+        appState.adminState.registrationsTableMissing = Boolean(res?.tableMissing);
+        if (rerenderAfter) renderAll();
+    } catch (err) {
+        showToast(err.message || 'Không thể tải danh sách đăng ký.', true);
+    }
+}
+
+function escapeCsvCell(value) {
+    const str = String(value ?? '');
+    if (/[",\r\n]/.test(str)) {
+        return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+}
+
+function downloadRegistrationsCsv(rows) {
+    const sortedRows = [...(rows || [])].sort((a, b) => {
+        const rankDiff = getSkillLevelRank(a.skill_level) - getSkillLevelRank(b.skill_level);
+        if (rankDiff !== 0) return rankDiff;
+        return String(a.full_name || '').localeCompare(String(b.full_name || ''), 'vi');
+    });
+    const header = ['#', 'Họ và tên', 'Tên thi đấu', 'Trình độ (Lv3 → Lv1)', 'Trạng thái', 'Thời gian đăng ký'];
+    const lines = [
+        header.map(escapeCsvCell).join(','),
+        ...sortedRows.map((r, idx) => [
+            idx + 1,
+            r.full_name || '',
+            r.display_name || r.full_name || '',
+            r.skill_level || '',
+            r.status === 'approved' ? 'Đã duyệt' : 'Chờ duyệt',
+            r.created_at || ''
+        ].map(escapeCsvCell).join(','))
+    ];
+    const blob = new Blob([`\uFEFF${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `danh-sach-dang-ky-vdv-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
 
 function isEditingScoreInput() {
     const active = document.activeElement;
@@ -175,6 +290,23 @@ function renderModeBanner() {
 }
 
 function renderHeroAndNav() {
+    const navEl = document.getElementById('nav-root');
+    const heroEl = document.getElementById('hero-root');
+
+    if (isRegisterPageMode()) {
+        if (navEl) {
+            navEl.innerHTML = '';
+            navEl.classList.add('hidden');
+        }
+        if (heroEl) {
+            heroEl.innerHTML = '';
+            heroEl.classList.add('hidden');
+        }
+        return;
+    }
+
+    if (navEl) navEl.classList.remove('hidden');
+
     const state = appState.data;
     if (!state) return;
 
@@ -188,9 +320,16 @@ function renderHeroAndNav() {
         return ev.effectiveStatus === 'completed';
     }).length;
 
-    const navEl = document.getElementById('nav-root');
     if (navEl) {
         const tab = appState.activeTab;
+        const awardsVisibility = config.awardsVisibility || 'public';
+        const showAwardsTab = appState.isAdmin || awardsVisibility !== 'hidden';
+        const awardsAdminBadge = appState.isAdmin && awardsVisibility !== 'public'
+            ? ` <span>${awardsVisibility === 'hidden' ? '🔒' : '🕶'}</span>`
+            : '';
+        const awardsTabHtml = showAwardsTab
+            ? `<button type="button" class="nav-tab ${tab === 'awards' ? 'active' : ''}" data-action="switch-tab" data-tab="awards">Vinh Danh &amp; Point${awardsAdminBadge}</button>`
+            : '';
         const adminTabHtml = appState.isAdmin
             ? `<button type="button" class="nav-tab admin-tab ${tab === 'admin' ? 'active' : ''}" data-action="switch-tab" data-tab="admin">${ICONS.sliders} Quản trị</button>`
             : '';
@@ -216,9 +355,7 @@ function renderHeroAndNav() {
                     <button type="button" class="nav-tab ${tab === 'teams' ? 'active' : ''}" data-action="switch-tab" data-tab="teams">
                         Đội Hình
                     </button>
-                    <button type="button" class="nav-tab ${tab === 'awards' ? 'active' : ''}" data-action="switch-tab" data-tab="awards">
-                        Giải Phụ &amp; Point
-                    </button>
+                    ${awardsTabHtml}
                     <button type="button" class="nav-tab ${tab === 'rules' ? 'active' : ''}" data-action="switch-tab" data-tab="rules">
                         Thể Thức
                     </button>
@@ -233,17 +370,18 @@ function renderHeroAndNav() {
                 </div>
             </div>
         `;
+        syncMobileHeaderHeight();
     }
 
-    const heroEl = document.getElementById('hero-root');
-    if (heroEl) {
+    const heroElAfter = document.getElementById('hero-root');
+    if (heroElAfter) {
         if (appState.tvMode || appState.activeTab !== 'standings') {
-            heroEl.classList.add('hidden');
-            heroEl.innerHTML = '';
+            heroElAfter.classList.add('hidden');
+            heroElAfter.innerHTML = '';
             return;
         }
 
-        heroEl.classList.remove('hidden');
+        heroElAfter.classList.remove('hidden');
 
         const statusBadge = state.tournament.status === 'live'
             ? `<span class="pill-status pill-live"><span class="pulse-dot"></span>Đang diễn ra</span>`
@@ -273,7 +411,7 @@ function renderHeroAndNav() {
             `;
         }).join('');
 
-        heroEl.innerHTML = `
+        heroElAfter.innerHTML = `
             <div class="wrap">
                 <div class="hero-grid">
                     <div>
@@ -341,6 +479,12 @@ function renderMainContent() {
         return;
     }
 
+    if (isRegisterPageMode()) {
+        document.body.classList.remove('tv-mode');
+        mainEl.innerHTML = renderRegisterPage(appState.data?.tournament, appState.registerState);
+        return;
+    }
+
     const state = appState.data;
     if (!state) return;
 
@@ -369,10 +513,10 @@ function renderMainContent() {
         : '';
 
     let tabHtml = '';
-    if (appState.activeTab === 'standings') tabHtml = renderStandingsTab(state, appState.isAdmin);
+    if (appState.activeTab === 'standings') tabHtml = renderStandingsTab(state, appState.isAdmin, appState.sessionMaskSeed);
     else if (appState.activeTab === 'matches') tabHtml = renderMatchesTab(state, appState.filters, appState.isAdmin);
     else if (appState.activeTab === 'teams') tabHtml = renderTeamsTab(state, appState.teamsQuery);
-    else if (appState.activeTab === 'awards') tabHtml = renderAwardsTab(state, appState.awardsFilters);
+    else if (appState.activeTab === 'awards') tabHtml = renderAwardsTab(state, appState.awardsFilters, appState.isAdmin, appState.sessionMaskSeed);
     else if (appState.activeTab === 'rules') tabHtml = renderRulesTab(state);
 
     mainEl.innerHTML = `${liveBanner}${tabHtml}`;
@@ -742,11 +886,16 @@ async function handleAction(action, el, event) {
     if (action === 'switch-tab') {
         appState.tvMode = false;
         const nextTab = el.dataset.tab;
+        const cfg = normalizeConfig(appState.data?.tournament?.config);
         if (nextTab === 'admin' && !appState.isAdmin) {
             appState.modal = { type: 'login', error: '' };
+        } else if (nextTab === 'awards' && !appState.isAdmin && cfg.awardsVisibility === 'hidden') {
+            appState.activeTab = 'standings';
+            showToast('Bảng Vinh Danh & Point đang tạm ẩn bởi Ban tổ chức.');
         } else {
             appState.activeTab = nextTab;
         }
+        document.body.classList.remove('mobile-header-hidden');
         renderAll();
         return;
     }
@@ -814,6 +963,9 @@ async function handleAction(action, el, event) {
     if (action === 'admin-subtab') {
         if (!appState.isAdmin) return;
         appState.adminState.subtab = el.dataset.subtab || 'scores';
+        if (appState.adminState.subtab === 'registrations') {
+            await loadAdminRegistrations({ rerenderAfter: false });
+        }
         renderMainContent();
         return;
     }
@@ -833,9 +985,116 @@ async function handleAction(action, el, event) {
         await store.signOutAdmin();
         appState.isAdmin = false;
         appState.adminEmail = null;
+        appState.adminState.registrations = [];
+        appState.adminState.registrationsTableMissing = false;
         appState.activeTab = 'standings';
         showToast('Đã đăng xuất chế độ Quản trị.');
         renderAll();
+        return;
+    }
+
+    if (action === 'register-another') {
+        appState.registerState = { submitting: false, error: '', submittedReceipt: null };
+        renderMainContent();
+        return;
+    }
+
+    if (action === 'reset-register-form') {
+        appState.registerState.error = '';
+        return;
+    }
+
+    if (action === 'copy-register-link') {
+        if (!appState.isAdmin) return;
+        const inputEl = document.getElementById('admin-register-link-input');
+        const linkVal = inputEl?.value || '';
+        if (!linkVal) return;
+        try {
+            if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(linkVal);
+            else showToast(`Link Form: ${linkVal}`);
+            showToast('Đã sao chép link Form Đăng Ký!');
+        } catch {
+            showToast(`Link Form: ${linkVal}`);
+        }
+        return;
+    }
+
+    if (action === 'copy-reg-sql') {
+        if (!appState.isAdmin) return;
+        try {
+            if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(REGISTRATION_TABLE_SQL);
+            showToast('Đã sao chép đoạn SQL tạo bảng Đăng ký VĐV!');
+        } catch {
+            showToast('Hãy bôi đen và copy đoạn SQL trực tiếp từ khung bên dưới.', true);
+        }
+        return;
+    }
+
+    if (action === 'toggle-registration-open') {
+        if (!appState.isAdmin || !appState.data) return;
+        const curCfg = normalizeConfig(appState.data.tournament?.config);
+        const nextOpen = !curCfg.registrationOpen;
+        try {
+            setSaveStatus('Đang lưu...');
+            appState.data = await store.updateTournament({
+                config: { ...curCfg, registrationOpen: nextOpen }
+            });
+            setSaveStatus('Đã lưu ✓');
+            showToast(nextOpen ? 'Đã MỞ Form nhận đơn đăng ký VĐV.' : 'Đã TẠM ĐÓNG Form đăng ký VĐV.');
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi!', true);
+            showToast(err.message || 'Không thể đổi trạng thái Form.', true);
+        }
+        return;
+    }
+
+    if (action === 'refresh-registrations') {
+        if (!appState.isAdmin) return;
+        await loadAdminRegistrations({ rerenderAfter: true });
+        showToast('Đã cập nhật danh sách đăng ký mới nhất.');
+        return;
+    }
+
+    if (action === 'export-registrations-csv') {
+        if (!appState.isAdmin) return;
+        downloadRegistrationsCsv(appState.adminState.registrations || []);
+        showToast('Đã tải xuống file CSV danh sách VĐV.');
+        return;
+    }
+
+    if (action === 'toggle-reg-status') {
+        if (!appState.isAdmin) return;
+        const regId = el.dataset.regId;
+        const nextStatus = el.dataset.nextStatus === 'approved' ? 'approved' : 'pending';
+        try {
+            setSaveStatus('Đang lưu...');
+            const res = await store.updateRegistration(regId, { status: nextStatus });
+            appState.adminState.registrations = res?.rows || [];
+            setSaveStatus('Đã lưu ✓');
+            renderMainContent();
+        } catch (err) {
+            setSaveStatus('Lỗi!', true);
+            showToast(err.message || 'Không thể cập nhật trạng thái.', true);
+        }
+        return;
+    }
+
+    if (action === 'delete-registration') {
+        if (!appState.isAdmin) return;
+        const regId = el.dataset.regId;
+        if (!confirm('Xóa đơn đăng ký này khỏi danh sách?')) return;
+        try {
+            setSaveStatus('Đang xóa...');
+            const res = await store.deleteRegistration(regId);
+            appState.adminState.registrations = res?.rows || [];
+            setSaveStatus('Đã xóa ✓');
+            showToast('Đã xóa đơn đăng ký.');
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi!', true);
+            showToast(err.message || 'Không thể xóa đơn.', true);
+        }
         return;
     }
 
@@ -848,23 +1107,6 @@ async function handleAction(action, el, event) {
             appState.data = await store.updateTeamMatch(matchId, { status: nextStatus });
             setSaveStatus('Đã lưu ✓');
             showToast(nextStatus === 'live' ? 'Đã bật trạng thái LIVE!' : (nextStatus === 'completed' ? 'Đã hoàn thành Team Match!' : 'Đã chuyển sang Sắp đấu.'));
-            renderAll();
-        } catch (err) {
-            setSaveStatus('Lỗi!', true);
-            showToast(err.message, true);
-        }
-        return;
-    }
-
-    if (action === 'quick-match-court') {
-        if (!appState.isAdmin) return;
-        const matchId = el.dataset.matchId;
-        const court = el.dataset.court;
-        try {
-            setSaveStatus('Đang lưu...');
-            appState.data = await store.updateTeamMatch(matchId, { court });
-            setSaveStatus('Đã lưu ✓');
-            showToast(`Đã chuyển trận sang ${court}.`);
             renderAll();
         } catch (err) {
             setSaveStatus('Lỗi!', true);
@@ -898,31 +1140,6 @@ async function handleAction(action, el, event) {
         return;
     }
 
-    if (action === 'sort-subs-by-status') {
-        if (!appState.isAdmin || !appState.data) return;
-        const tm = appState.data.teamMatches.find((m) => m.id === el.dataset.matchId);
-        if (!tm) return;
-        const config = normalizeConfig(appState.data.tournament?.config);
-        const evalTm = evaluateTeamMatch(tm, appState.data.subMatches, config);
-        const sorted = [...evalTm.subMatches].sort(
-            (a, b) => getSubMatchStatusRank(a.eval.effectiveStatus) - getSubMatchStatusRank(b.eval.effectiveStatus)
-                || (a.level_index ?? 0) - (b.level_index ?? 0)
-        );
-        await persistSubMatchOrders(sorted, 'Đã xếp Đang đấu / Sắp đấu lên đầu.');
-        return;
-    }
-
-    if (action === 'reset-sub-order') {
-        if (!appState.isAdmin || !appState.data) return;
-        const tm = appState.data.teamMatches.find((m) => m.id === el.dataset.matchId);
-        if (!tm) return;
-        const config = normalizeConfig(appState.data.tournament?.config);
-        const evalTm = evaluateTeamMatch(tm, appState.data.subMatches, config);
-        const byLevel = [...evalTm.subMatches].sort((a, b) => (a.level_index ?? 0) - (b.level_index ?? 0));
-        await persistSubMatchOrders(byLevel, 'Đã đưa thứ tự về Level 1 → cuối.');
-        return;
-    }
-
     if (action === 'quick-sub-court') {
         if (!appState.isAdmin) return;
         const nextCourt = String(el.dataset.court || '').trim();
@@ -931,39 +1148,6 @@ async function handleAction(action, el, event) {
             { court: nextCourt },
             nextCourt ? `Đã gán cặp sang ${nextCourt}.` : 'Đã đưa cặp về dùng sân chung của trận.'
         );
-        return;
-    }
-
-    if (action === 'assign-multi-courts' || action === 'clear-sub-courts') {
-        if (!appState.isAdmin || !appState.data) return;
-        const tm = appState.data.teamMatches.find((m) => m.id === el.dataset.matchId);
-        if (!tm) return;
-        const config = normalizeConfig(appState.data.tournament?.config);
-        const evalTm = evaluateTeamMatch(tm, appState.data.subMatches, config);
-        const assignSplit = action === 'assign-multi-courts';
-        try {
-            setSaveStatus('Đang lưu...');
-            for (let i = 0; i < evalTm.subMatches.length; i++) {
-                const sm = evalTm.subMatches[i];
-                const nextOverride = (sm.format_override && typeof sm.format_override === 'object')
-                    ? { ...sm.format_override }
-                    : {};
-                if (assignSplit) {
-                    nextOverride.court = `Sân ${i + 1}`;
-                } else {
-                    delete nextOverride.court;
-                }
-                const cleanOverride = Object.keys(nextOverride).length > 0 ? nextOverride : null;
-                sm.format_override = cleanOverride;
-                appState.data = await store.updateSubMatch(sm.id, { format_override: cleanOverride });
-            }
-            setSaveStatus('Đã lưu ✓');
-            showToast(assignSplit ? 'Đã chia mỗi cặp đấu 1 sân riêng!' : 'Đã đưa các cặp về dùng chung sân của trận.');
-            renderAll();
-        } catch (err) {
-            setSaveStatus('Lỗi lưu!', true);
-            showToast(err.message, true);
-        }
         return;
     }
 
@@ -1075,6 +1259,35 @@ async function handleAction(action, el, event) {
         return;
     }
 
+    if (action === 'set-awards-visibility') {
+        if (!appState.isAdmin || !appState.data) return;
+        const nextVisibility = String(el.dataset.visibility || 'public');
+        if (!['public', 'anonymous', 'hidden'].includes(nextVisibility)) return;
+        const currentCfg = normalizeConfig(appState.data.tournament?.config);
+        try {
+            setSaveStatus('Đang lưu...');
+            appState.data = await store.updateTournament({
+                config: {
+                    ...currentCfg,
+                    awardsVisibility: nextVisibility,
+                    awardsMaskSeed: currentCfg.awardsMaskSeed || 1
+                }
+            });
+            setSaveStatus('Đã lưu ✓');
+            const labelMap = {
+                public: 'Đã bật chế độ Công khai Bảng Vinh Danh & Point.',
+                anonymous: 'Đã bật chế độ Ẩn danh mã 3 số (random mới mỗi lần mở trang).',
+                hidden: 'Đã ẩn hoàn toàn Bảng Vinh Danh & Point khỏi người xem.'
+            };
+            showToast(labelMap[nextVisibility]);
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi!', true);
+            showToast(err.message || 'Không thể cập nhật chế độ hiển thị.', true);
+        }
+        return;
+    }
+
     if (action === 'delete-match') {
         if (!appState.isAdmin) return;
         const matchId = el.dataset.matchId;
@@ -1104,7 +1317,7 @@ async function handleAction(action, el, event) {
 
     if (action === 'reset-demo') {
         if (!appState.isAdmin) return;
-        if (!appState.data?.isUninitialized && !confirm('Khôi phục toàn bộ về dữ liệu mẫu 4 đội × 3 cặp? Dữ liệu hiện tại sẽ bị ghi đè.')) {
+        if (!appState.data?.isUninitialized && !confirm('Khôi phục toàn bộ về dữ liệu mẫu 6 đội × 3 cặp? Dữ liệu hiện tại sẽ bị ghi đè.')) {
             return;
         }
         try {
@@ -1216,17 +1429,25 @@ document.addEventListener('change', async (event) => {
         renderMainContent();
         return;
     }
+
+    if (action === 'reg-filter-status') {
+        appState.adminState.regStatusFilter = target.value || 'all';
+        renderMainContent();
+        return;
+    }
 });
 
 document.addEventListener('input', (event) => {
     const target = event.target;
-    if (target.dataset?.action === 'filter-query' || target.dataset?.action === 'awards-filter-query') {
+    if (target.dataset?.action === 'filter-query' || target.dataset?.action === 'awards-filter-query' || target.dataset?.action === 'reg-filter-query') {
         const inputId = target.id;
         const selStart = target.selectionStart;
         const selEnd = target.selectionEnd;
 
         if (target.dataset.action === 'awards-filter-query') {
             appState.awardsFilters.query = target.value;
+        } else if (target.dataset.action === 'reg-filter-query') {
+            appState.adminState.regQuery = target.value;
         } else if (inputId === 'teams-search-input') {
             appState.teamsQuery = target.value;
         } else {
@@ -1250,6 +1471,37 @@ document.addEventListener('submit', async (event) => {
     const form = event.target;
     event.preventDefault();
 
+    if (form.id === 'player-registration-form') {
+        const fd = new FormData(form);
+        appState.registerState.submitting = true;
+        appState.registerState.error = '';
+        renderMainContent();
+        try {
+            const res = await store.submitRegistration({
+                full_name: fd.get('full_name'),
+                display_name: fd.get('display_name'),
+                skill_level: fd.get('skill_level')
+            });
+            appState.registerState = {
+                submitting: false,
+                error: '',
+                submittedReceipt: res.entry
+            };
+            if (appState.isAdmin) {
+                await loadAdminRegistrations({ rerenderAfter: false });
+            }
+            renderMainContent();
+        } catch (err) {
+            appState.registerState = {
+                submitting: false,
+                error: err.message || 'Không thể gửi phiếu đăng ký.',
+                submittedReceipt: null
+            };
+            renderMainContent();
+        }
+        return;
+    }
+
     if (form.id === 'admin-login-form') {
         const fd = new FormData(form);
         try {
@@ -1261,6 +1513,7 @@ document.addEventListener('submit', async (event) => {
             appState.adminEmail = res.email;
             appState.modal = null;
             appState.activeTab = 'admin';
+            await loadAdminRegistrations({ rerenderAfter: false });
             showToast('Đăng nhập Quản trị thành công!');
             renderAll();
         } catch (err) {
@@ -1271,6 +1524,26 @@ document.addEventListener('submit', async (event) => {
     }
 
     if (!appState.isAdmin) return;
+
+    if (form.id === 'admin-add-registration-form') {
+        const fd = new FormData(form);
+        try {
+            setSaveStatus('Đang thêm...');
+            await store.submitRegistration({
+                full_name: fd.get('full_name'),
+                display_name: fd.get('display_name'),
+                skill_level: fd.get('skill_level')
+            }, 'approved');
+            await loadAdminRegistrations({ rerenderAfter: false });
+            setSaveStatus('Đã lưu ✓');
+            showToast('Đã thêm VĐV vào danh sách.');
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi!', true);
+            showToast(err.message || 'Không thể thêm VĐV.', true);
+        }
+        return;
+    }
 
     if (form.id === 'admin-match-meta-form') {
         const matchId = form.dataset.matchId;
@@ -1463,6 +1736,7 @@ document.addEventListener('submit', async (event) => {
                     pointsPerSet: Math.max(1, Number(fd.get('pointsPerSet')) || 11),
                     pointCap: Math.max(0, Number(fd.get('pointCap')) || 0),
                     winByTwo: fd.get('winByTwo') === 'on',
+                    awardsVisibility: String(fd.get('awardsVisibility') || currentCfg.awardsVisibility || 'public'),
                     levelNames
                 }
             });
@@ -1494,6 +1768,21 @@ document.addEventListener('keydown', (event) => {
     }
 });
 
+if (typeof window !== 'undefined') {
+    window.addEventListener('scroll', () => {
+        if (scrollTicking) return;
+        scrollTicking = true;
+        window.requestAnimationFrame(() => {
+            scrollTicking = false;
+            handleWindowScroll();
+        });
+    }, { passive: true });
+
+    window.addEventListener('resize', () => {
+        syncMobileHeaderHeight();
+    }, { passive: true });
+}
+
 async function bootstrap() {
     renderMainContent();
     try {
@@ -1502,11 +1791,20 @@ async function bootstrap() {
         appState.isAdmin = auth.isAdmin;
         appState.adminEmail = auth.email;
         appState.data = await store.fetchState();
+        if (appState.isAdmin) {
+            await loadAdminRegistrations({ rerenderAfter: false });
+        }
         appState.loading = false;
 
-        store.onAuthChange((isAdmin, info) => {
+        store.onAuthChange(async (isAdmin, info) => {
             appState.isAdmin = isAdmin;
             appState.adminEmail = info?.email || null;
+            if (isAdmin) {
+                await loadAdminRegistrations({ rerenderAfter: false });
+            } else {
+                appState.adminState.registrations = [];
+                appState.adminState.registrationsTableMissing = false;
+            }
             renderAll();
         });
 
