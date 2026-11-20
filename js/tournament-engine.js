@@ -35,9 +35,9 @@ export const DEFAULT_CONFIG = {
 };
 
 export const SKILL_LEVEL_OPTIONS = [
-    'Bậc thầy lão luyện',
-    'Dui dẻ sương sương',
-    'Mầm non tập sự'
+    'Lv1 - Bậc thầy lão luyện',
+    'Lv2 - Dui dẻ sương sương',
+    'Lv3 - Mầm non tập sự'
 ];
 
 export function escapeHtml(value) {
@@ -843,21 +843,38 @@ export function sanitizeRegistrationPayload(raw) {
 }
 
 /**
- * Returns sort priority for skill levels ordered descending from 'Bậc thầy lão luyện' (0) down to 'Mầm non tập sự' (2).
+ * Normalizes legacy and current skill level labels into canonical SKILL_LEVEL_OPTIONS entries (Lv1 -> Lv3).
  */
-export function getSkillLevelRank(skillLabel) {
+export function normalizeSkillLevel(skillLabel) {
     const text = String(skillLabel || '').trim();
+    if (!text) return 'Chưa rõ';
     const exactIdx = SKILL_LEVEL_OPTIONS.indexOf(text);
-    if (exactIdx >= 0) return exactIdx;
+    if (exactIdx >= 0) return SKILL_LEVEL_OPTIONS[exactIdx];
+
     const lower = text.toLowerCase();
-    if (lower.includes('lão luyện') || lower.includes('bậc thầy') || lower.includes('level 3') || lower.includes('3.0')) return 0;
-    if (lower.includes('dui dẻ') || lower.includes('sương sương') || lower.includes('2.5') || lower.includes('level 2')) return 1;
-    if (lower.includes('mầm non') || lower.includes('tập sự') || lower.includes('1.5') || lower.includes('level 1')) return 2;
-    return 99;
+    if (lower.includes('lão luyện') || lower.includes('bậc thầy') || lower.includes('3.0') || lower.includes('lv1') || lower.includes('level 1')) {
+        return SKILL_LEVEL_OPTIONS[0];
+    }
+    if (lower.includes('dui dẻ') || lower.includes('sương sương') || lower.includes('2.5') || lower.includes('lv2') || lower.includes('level 2')) {
+        return SKILL_LEVEL_OPTIONS[1];
+    }
+    if (lower.includes('mầm non') || lower.includes('tập sự') || lower.includes('1.5') || lower.includes('lv3') || lower.includes('level 3')) {
+        return SKILL_LEVEL_OPTIONS[2];
+    }
+    return text;
 }
 
 /**
- * Summarizes pre-tournament player registrations ordered from 'Bậc thầy lão luyện' down to 'Mầm non tập sự'.
+ * Returns sort priority for skill levels ordered descending from Lv1 (0) down to Lv3 (2).
+ */
+export function getSkillLevelRank(skillLabel) {
+    const normalized = normalizeSkillLevel(skillLabel);
+    const idx = SKILL_LEVEL_OPTIONS.indexOf(normalized);
+    return idx >= 0 ? idx : 99;
+}
+
+/**
+ * Summarizes pre-tournament player registrations ordered from Lv1 down to Lv3.
  */
 export function summarizeRegistrations(registrations = []) {
     const list = Array.isArray(registrations) ? registrations : [];
@@ -872,7 +889,7 @@ export function summarizeRegistrations(registrations = []) {
         else if (st === 'rejected') rejected += 1;
         else pending += 1;
 
-        const skill = String(r?.skill_level || 'Chưa rõ').trim() || 'Chưa rõ';
+        const skill = normalizeSkillLevel(r?.skill_level);
         skillCounts.set(skill, (skillCounts.get(skill) || 0) + 1);
     }
 
@@ -888,6 +905,131 @@ export function summarizeRegistrations(registrations = []) {
         rejected,
         bySkill
     };
+}
+
+/**
+ * Builds a normalized, deduplicated roster-picker catalog from non-rejected registrations.
+ */
+export function buildRegisteredPlayerCatalog(registrations = []) {
+    const active = (Array.isArray(registrations) ? registrations : []).filter((r) => (r?.status || 'pending') !== 'rejected');
+
+    const baseCounts = new Map();
+    for (const r of active) {
+        const baseName = String(r?.display_name || r?.full_name || '').trim();
+        if (!baseName) continue;
+        const k = baseName.toLowerCase();
+        baseCounts.set(k, (baseCounts.get(k) || 0) + 1);
+    }
+
+    const usedValues = new Set();
+    const entries = [];
+    for (const r of active) {
+        const fullName = String(r?.full_name || '').trim();
+        const baseName = String(r?.display_name || fullName || '').trim();
+        if (!baseName) continue;
+
+        let value = baseName;
+        if ((baseCounts.get(baseName.toLowerCase()) || 0) > 1 && fullName) {
+            const firstToken = fullName.split(/\s+/)[0];
+            const suffix = firstToken && firstToken.toLowerCase() !== baseName.toLowerCase() ? firstToken : fullName;
+            value = `${baseName} (${suffix})`;
+        }
+        let uniqueValue = value;
+        let serial = 2;
+        while (usedValues.has(uniqueValue.toLowerCase())) {
+            uniqueValue = `${value} #${serial}`;
+            serial += 1;
+        }
+        usedValues.add(uniqueValue.toLowerCase());
+
+        const rank = getSkillLevelRank(r?.skill_level);
+        const levelIndex = rank < 10 ? rank + 1 : 99;
+        const shortLvl = levelIndex <= 3 ? `Lv${levelIndex}` : '';
+        const status = r?.status || 'pending';
+        const hasDifferentFull = Boolean(fullName && fullName.toLowerCase() !== uniqueValue.toLowerCase());
+        const namePart = hasDifferentFull ? `${uniqueValue} (${fullName})` : uniqueValue;
+        const suffixParts = [shortLvl, status !== 'approved' ? 'Chờ duyệt' : ''].filter(Boolean);
+
+        entries.push({
+            id: r?.id || '',
+            value: uniqueValue,
+            key: uniqueValue.toLowerCase(),
+            fullName,
+            levelIndex,
+            status,
+            label: suffixParts.length > 0 ? `${namePart} · ${suffixParts.join(' · ')}` : namePart
+        });
+    }
+
+    return entries.sort((a, b) => {
+        const appDiff = (a.status === 'approved' ? 0 : 1) - (b.status === 'approved' ? 0 : 1);
+        if (appDiff !== 0) return appDiff;
+        const lvlDiff = a.levelIndex - b.levelIndex;
+        if (lvlDiff !== 0) return lvlDiff;
+        return a.label.localeCompare(b.label, 'vi');
+    });
+}
+
+/**
+ * Builds `<option>` markup for a roster slot while excluding players already chosen in other slots.
+ */
+export function buildPlayerSelectOptionsHtml(catalog = [], otherAssignedKeys = new Set(), currentValue = '', targetLevel = 1) {
+    const curVal = String(currentValue || '').trim();
+    const curKey = curVal.toLowerCase();
+    const list = Array.isArray(catalog) ? catalog : [];
+    const inCatalog = Boolean(curKey && list.some((p) => p.key === curKey));
+
+    const available = list.filter((p) => p.key === curKey || !otherAssignedKeys.has(p.key));
+    const matched = available.filter((p) => p.levelIndex === targetLevel);
+    const others = available.filter((p) => p.levelIndex !== targetLevel);
+
+    const renderOpt = (p) => `<option value="${escapeHtml(p.value)}" ${p.key === curKey ? 'selected' : ''}>${escapeHtml(p.label)}</option>`;
+
+    let optionsBody = `<option value="" ${!curVal ? 'selected' : ''}>— Chọn VĐV —</option>`;
+    if (curVal && !inCatalog) {
+        optionsBody += `<option value="${escapeHtml(curVal)}" selected>${escapeHtml(curVal)} (Ngoài ĐK)</option>`;
+    }
+
+    if (matched.length > 0 && others.length > 0) {
+        optionsBody += `<optgroup label="Đúng Level ${targetLevel}">${matched.map(renderOpt).join('')}</optgroup>`;
+        optionsBody += `<optgroup label="Level khác">${others.map(renderOpt).join('')}</optgroup>`;
+    } else if (available.length > 0) {
+        optionsBody += available.map(renderOpt).join('');
+    } else if (list.length === 0) {
+        optionsBody += '<option value="" disabled>Chưa có VĐV trong Đăng Ký</option>';
+    } else {
+        optionsBody += '<option value="" disabled>Đã chọn hết VĐV ĐK</option>';
+    }
+
+    return optionsBody;
+}
+
+/**
+ * Detects duplicate player names assigned to multiple slots across fixed lineup pairs.
+ */
+export function findDuplicateRosterPlayers(teamPairs = []) {
+    const seen = new Map();
+    const duplicates = [];
+
+    for (const pair of teamPairs || []) {
+        const slotName = pair?.pair_label || `L${pair?.level_index || '?'}`;
+        for (const field of ['player_1', 'player_2']) {
+            const name = String(pair?.[field] || '').trim();
+            if (!name) continue;
+            const key = name.toLowerCase();
+            if (!seen.has(key)) {
+                seen.set(key, { name, slots: [slotName] });
+            } else {
+                const entry = seen.get(key);
+                entry.slots.push(slotName);
+                if (entry.slots.length === 2) {
+                    duplicates.push(entry);
+                }
+            }
+        }
+    }
+
+    return duplicates;
 }
 
 export function normalizeSetPlayerStats(rawStats, setCount = 1) {

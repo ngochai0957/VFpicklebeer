@@ -1,6 +1,8 @@
 import { APP_CONFIG } from './config.js';
 import {
     SKILL_LEVEL_OPTIONS,
+    buildPlayerSelectOptionsHtml,
+    buildRegisteredPlayerCatalog,
     escapeHtml,
     evaluateSubMatch,
     evaluateTeamMatch,
@@ -11,6 +13,7 @@ import {
     normalizeConfig,
     normalizeRallyState,
     normalizeSetPlayerStats,
+    normalizeSkillLevel,
     parseScheduleValue,
     summarizeRegistrations
 } from './tournament-engine.js';
@@ -458,9 +461,39 @@ function renderScoreOperatorSubtab(state, adminState) {
     `;
 }
 
-function renderTeamsEditorSubtab(state) {
+function renderTeamsEditorSubtab(state, adminState) {
     const config = normalizeConfig(state.tournament?.config);
     const teams = [...(state.teams || [])].sort((a, b) => (a.seed_order ?? 0) - (b.seed_order ?? 0));
+    const catalog = buildRegisteredPlayerCatalog(adminState?.registrations || []);
+
+    const slotAssignments = [];
+    const assignedCounts = new Map();
+    for (const team of teams) {
+        const pairs = (state.teamPairs || []).filter((p) => p.team_id === team.id);
+        for (let lvl = 1; lvl <= config.levelsCount; lvl++) {
+            const pair = pairs.find((p) => p.level_index === lvl);
+            for (const field of ['player_1', 'player_2']) {
+                const val = String(pair?.[field] || '').trim();
+                const key = val.toLowerCase();
+                slotAssignments.push({ teamId: team.id, lvl, field, val, key });
+                if (key) assignedCounts.set(key, (assignedCounts.get(key) || 0) + 1);
+            }
+        }
+    }
+
+    const getOtherAssignedKeys = (selfKey) => {
+        const set = new Set();
+        for (const [k, cnt] of assignedCounts.entries()) {
+            if (k !== selfKey || cnt > 1) set.add(k);
+        }
+        return set;
+    };
+
+    const assignedRegisteredCount = catalog.filter((p) => (assignedCounts.get(p.key) || 0) > 0).length;
+    const remainingPoolCount = Math.max(0, catalog.length - assignedRegisteredCount);
+    const poolBadgeText = catalog.length > 0
+        ? `Chờ xếp: ${remainingPoolCount}/${catalog.length} VĐV`
+        : 'Chưa có VĐV ĐK';
 
     const teamEditorsHtml = teams.map((team) => {
         const pairs = (state.teamPairs || [])
@@ -476,20 +509,32 @@ function renderTeamsEditorSubtab(state) {
                 player_2: ''
             };
             const levelLabel = config.levelNames[i] || `Level ${lvl}`;
+            const p1Val = String(pair.player_1 || '').trim();
+            const p2Val = String(pair.player_2 || '').trim();
+            const p1Opts = buildPlayerSelectOptionsHtml(catalog, getOtherAssignedKeys(p1Val.toLowerCase()), p1Val, lvl);
+            const p2Opts = buildPlayerSelectOptionsHtml(catalog, getOtherAssignedKeys(p2Val.toLowerCase()), p2Val, lvl);
 
             return `
-                <div style="display:grid;grid-template-columns:110px 76px 1fr 1fr;gap:8px;align-items:center;margin-bottom:8px;">
-                    <span class="level-pill" style="text-align:center;">${escapeHtml(levelLabel)}</span>
-                    <input class="form-input" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="pair_label" value="${escapeHtml(pair.pair_label)}" placeholder="${escapeHtml(team.code)}${lvl}">
-                    <input class="form-input" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_1" value="${escapeHtml(pair.player_1)}" placeholder="VĐV 1">
-                    <input class="form-input" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_2" value="${escapeHtml(pair.player_2)}" placeholder="VĐV 2">
+                <div class="roster-pair-row">
+                    <div class="roster-pair-head">
+                        <span class="level-pill">${escapeHtml(levelLabel)}</span>
+                        <input class="form-input roster-pair-label-input" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="pair_label" value="${escapeHtml(pair.pair_label)}" placeholder="${escapeHtml(team.code)}${lvl}" aria-label="Mã cặp">
+                    </div>
+                    <div class="roster-pair-players">
+                        <select class="form-select roster-player-select" data-action="roster-player-select" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_1" aria-label="VĐV 1 ${escapeHtml(pair.pair_label)}">
+                            ${p1Opts}
+                        </select>
+                        <select class="form-select roster-player-select" data-action="roster-player-select" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_2" aria-label="VĐV 2 ${escapeHtml(pair.pair_label)}">
+                            ${p2Opts}
+                        </select>
+                    </div>
                 </div>
             `;
         }).join('');
 
         return `
-            <div class="card card-pad" style="border-left:5px solid ${escapeHtml(team.color)};">
-                <div style="display:grid;grid-template-columns:80px 1fr 70px;gap:10px;align-items:end;margin-bottom:14px;">
+            <div class="card card-pad roster-team-card" style="border-left:5px solid ${escapeHtml(team.color)};">
+                <div class="roster-team-meta">
                     <div>
                         <label class="form-label">Mã đội</label>
                         <input class="form-input" data-team-meta="${escapeHtml(team.id)}" data-field="code" value="${escapeHtml(team.code)}" maxlength="6">
@@ -500,45 +545,43 @@ function renderTeamsEditorSubtab(state) {
                     </div>
                     <div>
                         <label class="form-label">Màu</label>
-                        <input type="color" class="form-input" style="height:40px;padding:3px;" data-team-meta="${escapeHtml(team.id)}" data-field="color" value="${escapeHtml(team.color)}">
+                        <input type="color" class="form-input roster-color-input" data-team-meta="${escapeHtml(team.id)}" data-field="color" value="${escapeHtml(team.color)}">
                     </div>
                 </div>
-                <div style="font-size:12px;font-weight:800;color:var(--crimson);margin-bottom:8px;">ĐỘI HÌNH CỐ ĐỊNH (FIXED LINEUP)</div>
-                ${pairRowsHtml}
+                <div class="roster-lineup-kicker">ĐỘI HÌNH CỐ ĐỊNH (FIXED LINEUP)</div>
+                <div class="roster-pairs-list">
+                    ${pairRowsHtml}
+                </div>
             </div>
         `;
     }).join('');
 
     return `
-        <div>
-            <form id="admin-resize-roster-form" style="background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:18px;">
-                <div style="display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap;">
-                    <div style="min-width:150px;">
-                        <label class="form-label" for="resize-team-count">Số lượng đội (2–16)</label>
-                        <input id="resize-team-count" name="teamCount" type="number" min="2" max="16" class="form-input" value="${teams.length || 4}">
-                    </div>
-                    <div style="min-width:170px;">
-                        <label class="form-label" for="resize-levels-count">Số cặp cố định / đội (1–8)</label>
-                        <input id="resize-levels-count" name="levelsCount" type="number" min="1" max="8" class="form-input" value="${config.levelsCount}">
-                    </div>
-                    <button type="submit" class="btn btn-amber">Áp dụng số đội & số cặp</button>
+        <div class="roster-admin-wrap">
+            <form id="admin-resize-roster-form" class="roster-resize-bar">
+                <div class="roster-resize-field">
+                    <label class="form-label" for="resize-team-count">Số đội (2–16)</label>
+                    <input id="resize-team-count" name="teamCount" type="number" min="2" max="16" class="form-input" value="${teams.length || 4}">
                 </div>
-                <div class="section-sub" style="margin-top:8px;">
-                    Tăng số đội sẽ giữ nguyên các đội đang có và thêm đội mới. Nếu giảm số đội, các trận liên quan tới đội bị cắt sẽ được xóa theo.
+                <div class="roster-resize-field">
+                    <label class="form-label" for="resize-levels-count">Số cặp / đội (1–8)</label>
+                    <input id="resize-levels-count" name="levelsCount" type="number" min="1" max="8" class="form-input" value="${config.levelsCount}">
+                </div>
+                <div class="roster-resize-action">
+                    <button type="submit" class="btn btn-amber roster-resize-btn">Áp dụng</button>
                 </div>
             </form>
 
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;">
-                <h3 style="margin:0;">Chỉnh sửa Tên Đội & Đội Hình Cố Định</h3>
-                <button type="button" class="btn btn-primary" data-action="save-all-roster">Lưu toàn bộ Tên đội & VĐV</button>
+            <div class="roster-section-head">
+                <div class="roster-section-title-wrap">
+                    <h3 class="roster-section-title">Tên Đội &amp; Đội Hình</h3>
+                    <span id="roster-pool-badge" class="roster-pool-badge ${remainingPoolCount === 0 && catalog.length > 0 ? 'is-done' : ''}">${escapeHtml(poolBadgeText)}</span>
+                </div>
+                <button type="button" class="btn btn-primary btn-sm roster-save-btn" data-action="save-all-roster">Lưu đội hình</button>
             </div>
 
-            <div style="display:flex;flex-direction:column;gap:14px;">
+            <div id="admin-roster-editor" class="roster-teams-list">
                 ${teamEditorsHtml}
-            </div>
-
-            <div style="margin-top:16px;display:flex;justify-content:flex-end;">
-                <button type="button" class="btn btn-primary" data-action="save-all-roster">Lưu toàn bộ Tên đội & VĐV</button>
             </div>
         </div>
     `;
@@ -549,7 +592,12 @@ function renderScheduleEditorSubtab(state) {
     const teams = [...(state.teams || [])].sort((a, b) => (a.seed_order ?? 0) - (b.seed_order ?? 0));
     const teamsMap = new Map(teams.map((t) => [t.id, t]));
 
-    const teamOptions = teams.map((t) => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.name)}</option>`).join('');
+    const teamAOptions = teams
+        .map((t, idx) => `<option value="${escapeHtml(t.id)}" ${idx === 0 ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
+        .join('');
+    const teamBOptions = teams
+        .map((t, idx) => `<option value="${escapeHtml(t.id)}" ${(teams.length > 1 ? idx === 1 : idx === 0) ? 'selected' : ''}>${escapeHtml(t.name)}</option>`)
+        .join('');
 
     const matches = [...(state.teamMatches || [])].sort((a, b) => {
         if ((a.stage || 'round_robin') !== (b.stage || 'round_robin')) {
@@ -565,88 +613,100 @@ function renderScheduleEditorSubtab(state) {
         const courtsList = getTeamMatchCourts(ev.subMatches, tm);
         const courtSummary = courtsList.join(' · ');
         const schedSummary = formatScheduleRaw(tm.scheduled_time);
+        const metaText = [courtSummary, schedSummary].filter(Boolean).join(' · ');
+
         return `
-            <div class="set-editor-row" style="margin-top:0;margin-bottom:8px;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span class="tag ${tm.stage === 'playoff' ? 'tag-playoff' : 'tag-round'}">${escapeHtml(tm.round_name)}</span>
-                    <strong>${escapeHtml(tA?.name || '?')}</strong>
-                    <span style="color:var(--muted);">(${ev.subWinsA} - ${ev.subWinsB})</span>
-                    <strong>${escapeHtml(tB?.name || '?')}</strong>
-                    <span class="section-sub">${escapeHtml(courtSummary)} ${schedSummary ? `• ${escapeHtml(schedSummary)}` : ''}</span>
+            <div class="sched-match-row">
+                <div class="sched-match-info">
+                    <div class="sched-match-top">
+                        <span class="tag ${tm.stage === 'playoff' ? 'tag-playoff' : 'tag-round'}">${escapeHtml(tm.round_name)}</span>
+                        ${metaText ? `<span class="sched-match-meta">${escapeHtml(metaText)}</span>` : ''}
+                    </div>
+                    <div class="sched-match-teams">
+                        <strong class="sched-team-name">${escapeHtml(tA?.name || '?')}</strong>
+                        <span class="sched-score-pill tabular">${ev.subWinsA} – ${ev.subWinsB}</span>
+                        <strong class="sched-team-name">${escapeHtml(tB?.name || '?')}</strong>
+                    </div>
                 </div>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Nhập điểm</button>
-                    <button type="button" class="btn btn-danger btn-sm" data-action="delete-match" data-match-id="${escapeHtml(tm.id)}">Xóa</button>
+                <div class="sched-match-actions">
+                    <button type="button" class="btn btn-secondary btn-sm sched-row-btn" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Nhập điểm</button>
+                    <button type="button" class="btn btn-danger btn-sm sched-row-btn" data-action="delete-match" data-match-id="${escapeHtml(tm.id)}">Xóa</button>
                 </div>
             </div>
         `;
     }).join('');
 
     return `
-        <div class="admin-grid-2">
-            <div class="card card-pad">
-                <h3 style="margin:0 0 8px;">Sinh Lịch Vòng Tròn Tự Động</h3>
-                <p class="section-sub" style="margin-top:0;">
-                    Tự động ghép cặp vòng tròn chuẩn (Circle Method) cho tất cả <strong>${teams.length} đội</strong> hiện tại.
-                    Các trận Playoff/Chung kết thêm tay sẽ được giữ nguyên.
-                </p>
-                <form id="admin-generate-rr-form">
-                    <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-weight:600;">
+        <div class="sched-admin-wrap">
+            <form id="admin-generate-rr-form" class="sched-rr-bar">
+                <div class="sched-rr-head">
+                    <span class="sched-rr-title">Sinh Lịch Vòng Tròn</span>
+                    <span class="sched-count-pill">${teams.length} đội</span>
+                </div>
+                <div class="sched-rr-controls">
+                    <label class="sched-rr-check">
                         <input type="checkbox" name="doubleRoundRobin" ${config.doubleRoundRobin ? 'checked' : ''}>
-                        Đấu vòng tròn 2 lượt (Lượt đi & Lượt về)
+                        <span>2 lượt (Đi &amp; Về)</span>
                     </label>
-                    <button type="submit" class="btn btn-amber">Sinh lại Lịch Vòng Tròn</button>
-                </form>
-            </div>
+                    <button type="submit" class="btn btn-amber sched-rr-btn">Sinh lịch vòng tròn</button>
+                </div>
+            </form>
 
-            <div class="card card-pad">
-                <h3 style="margin:0 0 10px;">Thêm Trận Playoff / Tùy Chỉnh</h3>
-                <form id="admin-add-match-form">
-                    <div style="display:grid;grid-template-columns:1fr 140px;gap:10px;">
-                        <div class="form-group">
-                            <label class="form-label">Tên vòng / Trận</label>
-                            <input name="round_name" class="form-input" required value="Chung kết" placeholder="VD: Bán kết 1, Chung kết">
+            <div class="card card-pad sched-add-card">
+                <div class="sched-card-head">
+                    <h3 class="sched-card-title">Thêm Trận Playoff / Tùy Chỉnh</h3>
+                </div>
+                <form id="admin-add-match-form" class="sched-add-form">
+                    <div class="sched-add-row-1">
+                        <div class="sched-field">
+                            <label class="form-label" for="sched-round-name">Tên vòng / Trận</label>
+                            <input id="sched-round-name" name="round_name" class="form-input" required value="Chung kết" placeholder="VD: Bán kết 1, Chung kết">
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Giai đoạn</label>
-                            <select name="stage" class="form-select">
+                        <div class="sched-field">
+                            <label class="form-label" for="sched-stage">Giai đoạn</label>
+                            <select id="sched-stage" name="stage" class="form-select">
                                 <option value="playoff">Playoff / CK</option>
                                 <option value="round_robin">Vòng tròn</option>
                             </select>
                         </div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                        <div class="form-group">
-                            <label class="form-label">Đội A</label>
-                            <select name="team_a_id" class="form-select" required>${teamOptions}</select>
+                        <div class="sched-field">
+                            <label class="form-label" for="sched-team-a">Đội A</label>
+                            <select id="sched-team-a" name="team_a_id" class="form-select" required>${teamAOptions}</select>
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Đội B</label>
-                            <select name="team_b_id" class="form-select" required>${teamOptions}</select>
+                        <div class="sched-field">
+                            <label class="form-label" for="sched-team-b">Đội B</label>
+                            <select id="sched-team-b" name="team_b_id" class="form-select" required>${teamBOptions}</select>
                         </div>
                     </div>
-                    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));gap:10px;">
-                        <div class="form-group">
-                            <label class="form-label">Sân</label>
-                            <input name="court" class="form-input" value="Sân Trung Tâm">
+                    <div class="sched-add-row-2">
+                        <div class="sched-field">
+                            <label class="form-label" for="sched-date">Ngày thi đấu</label>
+                            <input id="sched-date" type="date" name="scheduled_date" class="form-input">
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Ngày thi đấu</label>
-                            <input type="date" name="scheduled_date" class="form-input">
+                        <div class="sched-field">
+                            <label class="form-label" for="sched-time">Giờ</label>
+                            <input id="sched-time" name="scheduled_time" class="form-input" value="16:00">
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Giờ</label>
-                            <input name="scheduled_time" class="form-input" value="16:00">
+                        <div class="sched-field">
+                            <label class="form-label" for="sched-court">Sân</label>
+                            <input id="sched-court" name="court" class="form-input" value="Sân Trung Tâm">
+                        </div>
+                        <div class="sched-add-action">
+                            <button type="submit" class="btn btn-primary sched-add-btn">+ Thêm trận</button>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary">+ Thêm Trận Đấu</button>
                 </form>
             </div>
-        </div>
 
-        <div style="margin-top:20px;">
-            <h3 style="margin:0 0 10px;">Danh Sách Tất Cả Các Trận (${matches.length})</h3>
-            ${listHtml || '<div class="section-sub">Chưa có trận đấu nào.</div>'}
+            <div class="sched-list-section">
+                <div class="sched-list-head">
+                    <h3 class="sched-card-title">Danh Sách Trận</h3>
+                    <span class="sched-count-pill">${matches.length} trận</span>
+                </div>
+                <div id="admin-schedule-list" class="sched-match-list">
+                    ${listHtml || '<div class="section-sub">Chưa có trận đấu nào.</div>'}
+                </div>
+            </div>
         </div>
     `;
 }
@@ -656,102 +716,115 @@ function renderSettingsSubtab(state, storeMode) {
     const config = normalizeConfig(t?.config);
 
     const levelInputs = config.levelNames.map((lvlName, idx) => `
-        <div>
-            <label class="form-label">Tên Level ${idx + 1}</label>
-            <input class="form-input" name="levelName_${idx}" value="${escapeHtml(lvlName)}" placeholder="Level ${idx + 1}">
+        <div class="settings-level-item">
+            <span class="settings-level-idx">Level ${idx + 1}</span>
+            <input class="form-input" name="levelName_${idx}" value="${escapeHtml(lvlName)}" placeholder="Level ${idx + 1}" aria-label="Tên Level ${idx + 1}">
         </div>
     `).join('');
 
     return `
-        <div class="admin-grid-2">
-            <form id="admin-settings-form" class="card card-pad">
-                <h3 style="margin:0 0 14px;">Thông Tin Giải Đấu & Luật Điểm (PPA Style)</h3>
-
-                <div class="form-group">
-                    <label class="form-label">Tên giải đấu</label>
-                    <input name="name" class="form-input" required value="${escapeHtml(t.name)}">
+        <div class="settings-grid">
+            <form id="admin-settings-form" class="card card-pad settings-card">
+                <div class="settings-card-head">
+                    <h3 class="settings-card-title">Thông Tin &amp; Luật Điểm</h3>
+                    <span class="settings-pill">PPA Style</span>
                 </div>
 
-                <div class="form-group">
-                    <label class="form-label">Mô tả / Địa điểm / Ngày thi đấu</label>
-                    <input name="subtitle" class="form-input" value="${escapeHtml(t.subtitle)}">
-                </div>
-
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                    <div class="form-group">
-                        <label class="form-label">Trạng thái giải</label>
-                        <select name="status" class="form-select">
-                            <option value="upcoming" ${t.status === 'upcoming' ? 'selected' : ''}>Sắp diễn ra</option>
-                            <option value="live" ${t.status === 'live' ? 'selected' : ''}>Đang diễn ra (LIVE)</option>
-                            <option value="completed" ${t.status === 'completed' ? 'selected' : ''}>Đã kết thúc</option>
-                        </select>
+                <div class="settings-form-body">
+                    <div class="settings-field">
+                        <label class="form-label" for="set-t-name">Tên giải đấu</label>
+                        <input id="set-t-name" name="name" class="form-input" required value="${escapeHtml(t.name)}">
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">Thể thức Set mặc định</label>
-                        <select name="bestOf" class="form-select">
-                            <option value="1" ${config.bestOf === 1 ? 'selected' : ''}>Best of 1 (1 Set)</option>
-                            <option value="3" ${config.bestOf === 3 ? 'selected' : ''}>Best of 3 (Thắng 2/3 Set)</option>
-                            <option value="5" ${config.bestOf === 5 ? 'selected' : ''}>Best of 5 (Thắng 3/5 Set)</option>
-                        </select>
-                    </div>
-                </div>
 
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                    <div class="form-group">
-                        <label class="form-label">Điểm kết thúc Set</label>
-                        <input name="pointsPerSet" type="number" min="1" max="50" class="form-input" value="${config.pointsPerSet}">
+                    <div class="settings-field">
+                        <label class="form-label" for="set-t-subtitle">Mô tả / Địa điểm / Ngày</label>
+                        <input id="set-t-subtitle" name="subtitle" class="form-input" value="${escapeHtml(t.subtitle)}">
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">Điểm trần (Cap, 0 = không trần)</label>
-                        <input name="pointCap" type="number" min="0" max="60" class="form-input" value="${config.pointCap}">
+
+                    <div class="settings-row-2">
+                        <div class="settings-field">
+                            <label class="form-label" for="set-t-status">Trạng thái giải</label>
+                            <select id="set-t-status" name="status" class="form-select">
+                                <option value="upcoming" ${t.status === 'upcoming' ? 'selected' : ''}>Sắp diễn ra</option>
+                                <option value="live" ${t.status === 'live' ? 'selected' : ''}>Đang diễn ra</option>
+                                <option value="completed" ${t.status === 'completed' ? 'selected' : ''}>Đã kết thúc</option>
+                            </select>
+                        </div>
+                        <div class="settings-field">
+                            <label class="form-label" for="set-t-bestof">Thể thức Set</label>
+                            <select id="set-t-bestof" name="bestOf" class="form-select">
+                                <option value="1" ${config.bestOf === 1 ? 'selected' : ''}>Bo1 (1 Set)</option>
+                                <option value="3" ${config.bestOf === 3 ? 'selected' : ''}>Bo3 (2/3 Set)</option>
+                                <option value="5" ${config.bestOf === 5 ? 'selected' : ''}>Bo5 (3/5 Set)</option>
+                            </select>
+                        </div>
                     </div>
-                </div>
 
-                <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-weight:600;">
-                    <input type="checkbox" name="winByTwo" ${config.winByTwo ? 'checked' : ''}>
-                    Bắt buộc thắng cách biệt 2 điểm (Win by 2)
-                </label>
+                    <div class="settings-row-2">
+                        <div class="settings-field">
+                            <label class="form-label" for="set-t-pts">Điểm kết thúc Set</label>
+                            <input id="set-t-pts" name="pointsPerSet" type="number" min="1" max="50" class="form-input" value="${config.pointsPerSet}">
+                        </div>
+                        <div class="settings-field">
+                            <label class="form-label" for="set-t-cap">Điểm trần (0 = mở)</label>
+                            <input id="set-t-cap" name="pointCap" type="number" min="0" max="60" class="form-input" value="${config.pointCap}">
+                        </div>
+                    </div>
 
-                <div style="margin-bottom:14px;">
-                    <label style="display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:6px;">
-                        Hiển thị Bảng Vinh Danh &amp; Point Cá Nhân (cho người xem công khai)
+                    <label class="settings-check-row">
+                        <input type="checkbox" name="winByTwo" ${config.winByTwo ? 'checked' : ''}>
+                        <span>Thắng cách biệt 2 điểm (Win by 2)</span>
                     </label>
-                    <select class="select-clean" name="awardsVisibility" style="width:100%;max-width:520px;">
-                        <option value="public" ${config.awardsVisibility === 'public' ? 'selected' : ''}>👁 Công khai đầy đủ (hiện tên thật VĐV &amp; cặp đấu)</option>
-                        <option value="anonymous" ${config.awardsVisibility === 'anonymous' ? 'selected' : ''}>🕶 Ẩn danh tên (giữ số liệu tổng, tự random mã 3 số mới mỗi lần mở trang)</option>
-                        <option value="hidden" ${config.awardsVisibility === 'hidden' ? 'selected' : ''}>🔒 Ẩn hoàn toàn (chỉ Admin mới xem được tab Vinh Danh &amp; Point)</option>
-                    </select>
+
+                    <div class="settings-field">
+                        <label class="form-label" for="set-t-awards-vis">Hiển thị Vinh Danh &amp; Point</label>
+                        <select id="set-t-awards-vis" class="form-select" name="awardsVisibility">
+                            <option value="public" ${config.awardsVisibility === 'public' ? 'selected' : ''}>👁 Công khai (hiện tên thật VĐV)</option>
+                            <option value="anonymous" ${config.awardsVisibility === 'anonymous' ? 'selected' : ''}>🕶 Ẩn danh (mã ngẫu nhiên mỗi lượt xem)</option>
+                            <option value="hidden" ${config.awardsVisibility === 'hidden' ? 'selected' : ''}>🔒 Chỉ Admin xem tab Vinh Danh</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-field">
+                        <span class="form-label">Tên gọi các Level</span>
+                        <div class="settings-levels-grid">
+                            ${levelInputs}
+                        </div>
+                    </div>
                 </div>
 
-                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:10px;margin-bottom:16px;">
-                    ${levelInputs}
+                <div class="settings-card-foot">
+                    <button type="submit" class="btn btn-primary settings-save-btn">Lưu cài đặt</button>
                 </div>
-
-                <button type="submit" class="btn btn-primary">Lưu Cài Đặt Giải Đấu</button>
             </form>
 
-            <div class="card card-pad">
-                <h3 style="margin:0 0 10px;">Sao Lưu, Khôi Phục & Cloud DB</h3>
-                <p class="section-sub" style="margin-top:0;">
-                    Chế độ hiện tại: <strong>${storeMode === 'supabase' ? 'Supabase Cloud Realtime' : 'Local Demo (localStorage)'}</strong>
-                </p>
+            <div class="card card-pad settings-card">
+                <div class="settings-card-head">
+                    <h3 class="settings-card-title">Sao Lưu &amp; Dữ Liệu</h3>
+                    <span class="settings-mode-pill ${storeMode === 'supabase' ? 'is-cloud' : ''}">
+                        ${storeMode === 'supabase' ? 'Supabase Cloud' : 'Local Demo'}
+                    </span>
+                </div>
 
-                <div style="display:flex;flex-direction:column;gap:10px;margin-top:14px;">
-                    <button type="button" class="btn btn-secondary" data-action="export-json">Tải xuống bản sao lưu JSON</button>
+                <div class="settings-backup-actions">
+                    <button type="button" class="btn btn-secondary settings-action-btn" data-action="export-json">⬇ Tải sao lưu JSON</button>
 
-                    <label class="btn btn-secondary" style="cursor:pointer;">
-                        Nhập dữ liệu từ file JSON
+                    <label class="btn btn-secondary settings-action-btn">
+                        ⬆ Nhập từ file JSON
                         <input type="file" accept=".json,application/json" id="admin-import-json-input" class="hidden">
                     </label>
 
-                    <button type="button" class="btn btn-danger" data-action="reset-demo">Khôi phục dữ liệu mẫu (6 Đội × 3 Cặp)</button>
+                    <hr class="settings-divider">
+
+                    <button type="button" class="btn btn-danger settings-action-btn" data-action="reset-demo">↺ Khôi phục dữ liệu mẫu (6×3)</button>
                 </div>
 
-                <div class="alert alert-info" style="margin-top:18px;margin-bottom:0;">
-                    <strong>Muốn phát trực tiếp cho mọi người từ xa?</strong><br>
-                    Chạy script <code>supabase/schema.sql</code> trên Supabase, tạo 1 tài khoản Admin duy nhất, rồi điền
-                    <code>SUPABASE_URL</code> & <code>SUPABASE_ANON_KEY</code> vào <code>js/config.js</code> và đẩy thư mục này lên Vercel/Netlify/GitHub Pages.
-                </div>
+                <details class="settings-help-details">
+                    <summary>Hướng dẫn kết nối Supabase Cloud</summary>
+                    <div class="settings-help-body">
+                        Chạy <code>supabase/schema.sql</code> trên Supabase, tạo 1 tài khoản Admin, điền <code>SUPABASE_URL</code> và <code>SUPABASE_ANON_KEY</code> vào <code>js/config.js</code> rồi deploy.
+                    </div>
+                </details>
             </div>
         </div>
     `;
@@ -782,6 +855,14 @@ function formatRegDate(isoStr) {
     }
 }
 
+function getSkillTierClass(skillLabel) {
+    const rank = getSkillLevelRank(skillLabel);
+    if (rank === 0) return 'lv-1';
+    if (rank === 1) return 'lv-2';
+    if (rank === 2) return 'lv-3';
+    return '';
+}
+
 function renderRegistrationsSubtab(state, adminState, storeMode) {
     const config = normalizeConfig(state.tournament?.config);
     const regs = Array.isArray(adminState.registrations) ? adminState.registrations : [];
@@ -795,7 +876,8 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
         .filter((r) => {
             if (regStatusFilter !== 'all' && (r.status || 'pending') !== regStatusFilter) return false;
             if (regQuery) {
-                const hay = `${r.full_name || ''} ${r.display_name || ''} ${r.skill_level || ''}`.toLowerCase();
+                const displaySkill = normalizeSkillLevel(r.skill_level || '');
+                const hay = `${r.full_name || ''} ${r.display_name || ''} ${r.skill_level || ''} ${displaySkill}`.toLowerCase();
                 if (!hay.includes(regQuery)) return false;
             }
             return true;
@@ -808,11 +890,11 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
 
     const missingTableBanner = (storeMode === 'supabase' && tableMissing)
         ? `
-            <div class="alert alert-warn" style="margin-bottom:16px;">
+            <div class="alert alert-warn" style="margin-bottom:14px;">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
                     <strong>Chưa tạo bảng <code>player_registrations</code> trên Supabase</strong>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <button type="button" class="btn btn-secondary btn-sm" data-action="copy-reg-sql">📋 Copy SQL tạo bảng</button>
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="copy-reg-sql">📋 Copy SQL</button>
                         <button type="button" class="btn btn-primary btn-sm" data-action="refresh-registrations">↻ Kiểm tra lại</button>
                     </div>
                 </div>
@@ -823,93 +905,116 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
         : '';
 
     const skillBreakdownHtml = summary.bySkill.length > 0
-        ? summary.bySkill.map((s) => `<span class="tag tag-round">${escapeHtml(s.label)}: <strong>${s.count}</strong></span>`).join('')
+        ? summary.bySkill.map((s) => `
+            <div class="reg-skill-chip ${getSkillTierClass(s.label)}">
+                <span class="reg-skill-name">${escapeHtml(s.label)}</span>
+                <strong class="reg-skill-count tabular">${s.count}</strong>
+            </div>
+        `).join('')
         : '<span class="section-sub">Chưa có VĐV đăng ký nào.</span>';
 
     const skillOptionsHtml = SKILL_LEVEL_OPTIONS.map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join('');
 
     const rowsHtml = filteredRegs.map((r, idx) => {
         const st = r.status || 'pending';
+        const fullName = String(r.full_name || '');
+        const nickName = String(r.display_name || fullName);
+        const showMobileNick = Boolean(nickName && nickName !== fullName);
+        const displaySkill = normalizeSkillLevel(r.skill_level || '');
+        const tierCls = getSkillTierClass(displaySkill);
+
         const statusBtn = st === 'approved'
-            ? `<button type="button" class="tag tag-status-completed" style="border:1px solid rgba(14,124,91,0.3);cursor:pointer;" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="pending" title="Bấm để chuyển lại Chờ duyệt">✓ Đã duyệt</button>`
-            : `<button type="button" class="tag tag-status-upcoming" style="border:1px solid var(--line);cursor:pointer;" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="approved" title="Bấm để duyệt VĐV này vào danh sách chính">Chờ duyệt</button>`;
+            ? `<button type="button" class="tag reg-status-btn is-approved" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="pending" title="Bấm để chuyển lại Chờ duyệt">✓ Đã duyệt</button>`
+            : `<button type="button" class="tag reg-status-btn is-pending" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="approved" title="Bấm để duyệt VĐV này vào danh sách chính">Chờ duyệt</button>`;
 
         return `
-            <tr>
-                <td class="tabular" style="color:var(--muted);">${idx + 1}</td>
-                <td class="col-left"><strong>${escapeHtml(r.full_name)}</strong></td>
-                <td class="col-left"><span style="color:var(--primary);font-weight:750;">${escapeHtml(r.display_name || r.full_name)}</span></td>
-                <td class="col-left"><span class="tag tag-round">${escapeHtml(r.skill_level)}</span></td>
-                <td class="tabular" style="font-size:12px;color:var(--muted);">${escapeHtml(formatRegDate(r.created_at))}</td>
-                <td>${statusBtn}</td>
-                <td>
-                    <button type="button" class="btn btn-danger btn-sm" style="padding:4px 10px;" data-action="delete-registration" data-reg-id="${escapeHtml(r.id)}" title="Xóa phiếu này">Xóa</button>
+            <tr class="reg-row">
+                <td class="tabular reg-col-idx">${idx + 1}</td>
+                <td class="col-left reg-col-name">
+                    <div class="reg-name-stack">
+                        <strong>${escapeHtml(fullName)}</strong>
+                        ${showMobileNick ? `<span class="reg-mobile-nick">${escapeHtml(nickName)}</span>` : ''}
+                    </div>
+                </td>
+                <td class="col-left reg-col-nick"><span class="reg-nick-text">${escapeHtml(nickName)}</span></td>
+                <td class="col-left reg-col-skill"><span class="tag reg-skill-tag ${tierCls}">${escapeHtml(displaySkill)}</span></td>
+                <td class="tabular reg-col-date">${escapeHtml(formatRegDate(r.created_at))}</td>
+                <td class="reg-col-status">${statusBtn}</td>
+                <td class="reg-col-del">
+                    <button type="button" class="btn btn-danger btn-sm reg-del-btn" data-action="delete-registration" data-reg-id="${escapeHtml(r.id)}" title="Xóa phiếu này" aria-label="Xóa phiếu này">Xóa</button>
                 </td>
             </tr>
         `;
     }).join('');
 
     return `
-        <div>
-            <div class="reg-admin-share-card">
-                <div style="flex:1;min-width:260px;">
-                    <div style="font-size:13px;font-weight:800;color:var(--ink);margin-bottom:4px;">Link Form Đăng Ký (kiểu Google Form — ẩn hoàn toàn với người xem thường)</div>
-                    <div class="section-sub" style="margin-bottom:8px;">Copy gửi link này cho VĐV điền trước giải. User gửi đơn xong không xem được danh sách của người khác.</div>
-                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                        <input id="admin-register-link-input" type="text" readonly class="form-input" style="flex:1;min-width:220px;font-size:13px;" value="${escapeHtml(registerUrl)}">
-                        <button type="button" class="btn btn-primary btn-sm" data-action="copy-register-link">📋 Copy Link Form</button>
-                        <a href="${escapeHtml(registerUrl)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm" style="text-decoration:none;">↗ Mở thử Form</a>
+        <div class="reg-admin-panel">
+            <div class="reg-share-card">
+                <div class="reg-share-head">
+                    <div class="reg-share-title-wrap">
+                        <span class="reg-share-title">Form Đăng Ký</span>
+                        <span class="reg-status-pill ${config.registrationOpen ? 'is-open' : 'is-closed'}">
+                            <span class="reg-status-dot"></span>${config.registrationOpen ? 'Đang mở' : 'Đang đóng'}
+                        </span>
                     </div>
-                </div>
-
-                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
-                    <span class="pill-status ${config.registrationOpen ? 'pill-live' : 'pill-completed'}">${config.registrationOpen ? 'Form đang MỞ nhận đơn' : 'Form đã ĐÓNG'}</span>
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="toggle-registration-open">
-                        ${config.registrationOpen ? '🔒 Tạm đóng Form' : '🔓 Mở lại Form'}
+                    <button type="button" class="btn btn-sm reg-toggle-btn ${config.registrationOpen ? 'btn-secondary' : 'btn-primary'}" data-action="toggle-registration-open">
+                        ${config.registrationOpen ? '🔒 Đóng Form' : '🔓 Mở Form'}
                     </button>
+                </div>
+                <div class="reg-share-link-row">
+                    <input id="admin-register-link-input" type="text" readonly class="form-input reg-link-input" value="${escapeHtml(registerUrl)}" aria-label="Link Form Đăng Ký">
+                    <button type="button" class="btn btn-primary btn-sm reg-share-btn" data-action="copy-register-link">📋 Copy</button>
+                    <a href="${escapeHtml(registerUrl)}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm reg-share-btn" style="text-decoration:none;">↗ Mở</a>
                 </div>
             </div>
 
             ${missingTableBanner}
 
-            <div class="reg-summary-grid">
-                <div class="reg-summary-cell">
+            <div class="reg-kpi-row">
+                <div class="reg-kpi-cell">
                     <span class="reg-sum-lbl">Tổng đăng ký</span>
                     <strong class="reg-sum-val tabular">${summary.total}</strong>
                 </div>
-                <div class="reg-summary-cell">
+                <div class="reg-kpi-cell">
                     <span class="reg-sum-lbl">Đã duyệt</span>
                     <strong class="reg-sum-val tabular" style="color:var(--primary);">${summary.approved}</strong>
                 </div>
-                <div class="reg-summary-cell">
+                <div class="reg-kpi-cell">
                     <span class="reg-sum-lbl">Chờ duyệt</span>
                     <strong class="reg-sum-val tabular" style="color:var(--gold);">${summary.pending}</strong>
                 </div>
-                <div class="reg-summary-cell wide">
-                    <span class="reg-sum-lbl">Thống kê từ Bậc thầy lão luyện xuống Mầm non tập sự (thủ công quay cặp &amp; chia đội sau)</span>
-                    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">${skillBreakdownHtml}</div>
-                </div>
             </div>
 
-            <div class="filter-bar" style="margin-bottom:14px;">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <input id="admin-reg-search" type="search" class="form-input" style="width:240px;" data-action="reg-filter-query" value="${escapeHtml(adminState.regQuery || '')}" placeholder="Tìm họ tên, tên thi đấu, level...">
-                    <select class="select-clean" data-action="reg-filter-status" aria-label="Lọc trạng thái đơn">
+            <div class="reg-skill-card">
+                <div class="reg-skill-head">
+                    <span class="reg-sum-lbl">Phân bổ trình độ</span>
+                    <span class="reg-skill-hint">Lv1 → Lv3</span>
+                </div>
+                <div class="reg-skill-grid">${skillBreakdownHtml}</div>
+            </div>
+
+            <div class="reg-toolbar">
+                <div class="reg-toolbar-filters">
+                    <div class="search-input-wrap reg-search-wrap">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input id="admin-reg-search" type="search" class="search-input" data-action="reg-filter-query" value="${escapeHtml(adminState.regQuery || '')}" placeholder="Tìm VĐV, level...">
+                    </div>
+                    <select class="select-clean reg-status-select" data-action="reg-filter-status" aria-label="Lọc trạng thái đơn">
                         <option value="all" ${regStatusFilter === 'all' ? 'selected' : ''}>Tất cả (${summary.total})</option>
                         <option value="pending" ${regStatusFilter === 'pending' ? 'selected' : ''}>Chờ duyệt (${summary.pending})</option>
                         <option value="approved" ${regStatusFilter === 'approved' ? 'selected' : ''}>Đã duyệt (${summary.approved})</option>
                     </select>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                <div class="reg-toolbar-actions">
                     <button type="button" class="btn btn-secondary btn-sm" data-action="refresh-registrations">↻ Tải lại</button>
                     <button type="button" class="btn btn-secondary btn-sm" data-action="export-registrations-csv" ${regs.length === 0 ? 'disabled' : ''}>⬇ Xuất CSV</button>
                 </div>
             </div>
 
-            <details class="reg-manual-details" style="margin-bottom:14px;">
-                <summary>+ Admin thêm VĐV thủ công vào danh sách</summary>
-                <form id="admin-add-registration-form" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:10px;padding-top:12px;">
+            <details class="reg-manual-details">
+                <summary>+ Thêm VĐV thủ công</summary>
+                <form id="admin-add-registration-form" class="reg-manual-form">
                     <div>
                         <label class="form-label">Họ và tên *</label>
                         <input name="full_name" class="form-input" required maxlength="80" placeholder="Nguyễn Văn A">
@@ -924,7 +1029,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                             ${skillOptionsHtml}
                         </select>
                     </div>
-                    <div style="display:flex;align-items:flex-end;">
+                    <div class="reg-manual-submit">
                         <button type="submit" class="btn btn-primary btn-sm" style="width:100%;height:39px;">Thêm vào danh sách</button>
                     </div>
                 </form>
@@ -932,15 +1037,15 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
 
             <div class="card">
                 <div class="table-wrap">
-                    <table class="standings-table">
+                    <table class="standings-table reg-table">
                         <thead>
                             <tr>
                                 <th style="width:44px;">#</th>
                                 <th class="col-left">Họ và tên</th>
                                 <th class="col-left">Tên thi đấu</th>
-                                <th class="col-left">Trình độ (Lv3 → Lv1)</th>
+                                <th class="col-left">Trình độ (Lv1 → Lv3)</th>
                                 <th style="width:108px;">Thời gian</th>
-                                <th style="width:100px;">Trạng thái</th>
+                                <th style="width:106px;">Trạng thái</th>
                                 <th style="width:66px;"></th>
                             </tr>
                         </thead>
@@ -971,7 +1076,7 @@ export function renderAdminTab(state, adminState, storeMode) {
     let bodyHtml = '';
     if (subtab === 'scores') bodyHtml = renderScoreOperatorSubtab(state, adminState);
     else if (subtab === 'registrations') bodyHtml = renderRegistrationsSubtab(state, adminState, storeMode);
-    else if (subtab === 'teams') bodyHtml = renderTeamsEditorSubtab(state);
+    else if (subtab === 'teams') bodyHtml = renderTeamsEditorSubtab(state, adminState);
     else if (subtab === 'schedule') bodyHtml = renderScheduleEditorSubtab(state);
     else if (subtab === 'settings') bodyHtml = renderSettingsSubtab(state, storeMode);
 
@@ -985,7 +1090,7 @@ export function renderAdminTab(state, adminState, storeMode) {
                     <button type="button" class="admin-subtab ${subtab === 'schedule' ? 'active' : ''}" data-action="admin-subtab" data-subtab="schedule">Lịch Thi Đấu</button>
                     <button type="button" class="admin-subtab ${subtab === 'settings' ? 'active' : ''}" data-action="admin-subtab" data-subtab="settings">Cài Đặt & Backup</button>
                 </div>
-                <div style="display:flex;align-items:center;gap:10px;">
+                <div class="admin-subnav-actions">
                     <span id="admin-save-status" style="font-size:12.5px;color:var(--emerald);font-weight:750;">Sẵn sàng</span>
                     <button type="button" class="btn btn-danger btn-sm" data-action="admin-logout">Đăng xuất Admin</button>
                 </div>

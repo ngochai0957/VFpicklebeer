@@ -8,6 +8,8 @@ import {
     anonymizeAwardsLeaderboards,
     applyRallyOutcomeToSet,
     buildCourtBoard,
+    buildPlayerSelectOptionsHtml,
+    buildRegisteredPlayerCatalog,
     buildResizedRoster,
     calculatePairLeaderboard,
     calculatePlayerLeaderboard,
@@ -17,6 +19,7 @@ import {
     evaluateSetWinner,
     evaluateSubMatch,
     evaluateTeamMatch,
+    findDuplicateRosterPlayers,
     formatScheduleDisplay,
     generateRoundRobinSchedule,
     normalizeConfig,
@@ -254,6 +257,22 @@ test('Admin UI renders all 4 subtabs and clean password-only login modal', () =>
         assert.ok(html.includes('Bảng Điều Khiển Admin') || html.includes('Đăng xuất Admin'));
         assert.ok(html.length > 200);
     }
+
+    const scheduleHtml = renderAdminTab(state, { subtab: 'schedule' }, 'supabase');
+    assert.ok(scheduleHtml.includes('id="admin-generate-rr-form"'));
+    assert.equal(scheduleHtml.includes('Circle Method'), false);
+    assert.ok(scheduleHtml.includes(`id="sched-team-b"`));
+    assert.ok(scheduleHtml.includes(`<option value="${state.teams[1].id}" selected>`));
+    assert.ok(scheduleHtml.includes('data-action="admin-edit-match"'));
+    assert.ok(scheduleHtml.includes('data-action="delete-match"'));
+
+    const settingsHtml = renderAdminTab(state, { subtab: 'settings' }, 'supabase');
+    assert.ok(settingsHtml.includes('id="admin-settings-form"'));
+    assert.ok(settingsHtml.includes('class="form-select" name="awardsVisibility"'));
+    assert.ok(settingsHtml.includes('data-action="export-json"'));
+    assert.ok(settingsHtml.includes('id="admin-import-json-input"'));
+    assert.ok(settingsHtml.includes('data-action="reset-demo"'));
+    assert.ok(settingsHtml.includes('class="settings-help-details"'));
 });
 
 test('Court Board, Form guide, Tiebreaker annotation, Player Search, and TV Mode work cleanly', () => {
@@ -647,9 +666,9 @@ test('Google-Form-style player registration page and Admin registrations dashboa
     assert.ok(formHtml.includes('Họ và tên'));
     assert.ok(formHtml.includes('Tên thi đấu'));
     assert.ok(formHtml.includes('Trình độ (Tự đánh giá)'));
-    assert.ok(formHtml.includes('value="Bậc thầy lão luyện"'));
-    assert.ok(formHtml.includes('value="Dui dẻ sương sương"'));
-    assert.ok(formHtml.includes('value="Mầm non tập sự"'));
+    assert.ok(formHtml.includes('value="Lv1 - Bậc thầy lão luyện"'));
+    assert.ok(formHtml.includes('value="Lv2 - Dui dẻ sương sương"'));
+    assert.ok(formHtml.includes('value="Lv3 - Mầm non tập sự"'));
     assert.equal(formHtml.includes('Bạn muốn đánh cặp với ai?'), false);
     assert.equal(formHtml.includes('Bạn không muốn đánh cặp với ai?'), false);
 
@@ -664,11 +683,11 @@ test('Google-Form-style player registration page and Admin registrations dashboa
     assert.ok(closedHtml.includes('tạm đóng'));
     assert.equal(closedHtml.includes('id="player-registration-form"'), false);
 
-    // Admin Registrations stats and table sort descending from 'Bậc thầy lão luyện' down to 'Mầm non tập sự'
+    // Admin Registrations stats and table normalize legacy labels and sort descending from Lv1 -> Lv3
     const sampleRegs = [
         { full_name: 'Lê Minh', display_name: 'Minh', skill_level: 'Mầm non tập sự', id: 'reg_low', status: 'pending', created_at: '2026-11-19T08:00:00Z' },
         { ...clean, id: 'reg_1', status: 'pending', created_at: '2026-11-19T08:02:00Z' },
-        { full_name: 'Trần Quốc Bảo', display_name: 'Quốc Bảo', skill_level: 'Bậc thầy lão luyện', id: 'reg_top', status: 'approved', created_at: '2026-11-19T08:05:00Z' }
+        { full_name: 'Trần Quốc Bảo', display_name: 'Quốc Bảo', skill_level: 'Lv1 - Bậc thầy lão luyện', id: 'reg_top', status: 'approved', created_at: '2026-11-19T08:05:00Z' }
     ];
     const summary = summarizeRegistrations(sampleRegs);
     assert.equal(summary.total, 3);
@@ -676,7 +695,7 @@ test('Google-Form-style player registration page and Admin registrations dashboa
     assert.equal(summary.pending, 2);
     assert.deepEqual(
         summary.bySkill.map((s) => s.label),
-        ['Bậc thầy lão luyện', 'Dui dẻ sương sương', 'Mầm non tập sự']
+        ['Lv1 - Bậc thầy lão luyện', 'Lv2 - Dui dẻ sương sương', 'Lv3 - Mầm non tập sự']
     );
     assert.equal(summary.bySkill[0].count, 1);
     assert.equal(summary.bySkill[1].count, 1);
@@ -691,7 +710,7 @@ test('Google-Form-style player registration page and Admin registrations dashboa
     assert.ok(adminRegHtml.includes('CREATE TABLE IF NOT EXISTS public.player_registrations'));
     assert.ok(adminRegHtml.includes('data-action="copy-register-link"'));
     assert.ok(adminRegHtml.includes('data-action="export-registrations-csv"'));
-    // Row ordering puts Quốc Bảo (Bậc thầy lão luyện) above Nguyễn Văn Hải (Dui dẻ sương sương) above Lê Minh (Mầm non tập sự)
+    // Row ordering puts Quốc Bảo (Lv1) above Nguyễn Văn Hải (Lv2) above Lê Minh (Lv3)
     assert.ok(adminRegHtml.indexOf('Quốc Bảo') < adminRegHtml.indexOf('Nguyễn Văn Hải'));
     assert.ok(adminRegHtml.indexOf('Nguyễn Văn Hải') < adminRegHtml.indexOf('Minh'));
 });
@@ -810,4 +829,84 @@ test('Awards visibility supports public, anonymous codenames (no leaks), and hid
         maskedSeed101.playerBoard.byPoints.map((p) => p.name),
         maskedSeed202.playerBoard.byPoints.map((p) => p.name)
     );
+});
+
+test('roster player catalog, exclusive select options, duplicate detection, and teams subtab UI', () => {
+    const registrations = [
+        { id: 'r1', full_name: 'Nguyễn Văn An', display_name: 'An', skill_level: 'Lv3 - Mầm non tập sự', status: 'approved' },
+        { id: 'r2', full_name: 'Trần Thị Bình', display_name: 'Bình', skill_level: 'Lv1 - Bậc thầy lão luyện', status: 'pending' },
+        { id: 'r3', full_name: 'Lê Minh An', display_name: 'An', skill_level: 'Lv2 - Dui dẻ sương sương', status: 'approved' },
+        { id: 'r4', full_name: 'Phạm Quốc Cường', display_name: 'Cường', skill_level: 'Lv1 - Bậc thầy lão luyện', status: 'approved' },
+        { id: 'r5', full_name: 'Vũ Bị Từ Chối', display_name: 'Blocked', skill_level: 'Lv1 - Bậc thầy lão luyện', status: 'rejected' }
+    ];
+
+    const catalog = buildRegisteredPlayerCatalog(registrations);
+    assert.equal(catalog.length, 4);
+    assert.equal(catalog.some((entry) => entry.value === 'Blocked'), false);
+
+    // Approved entries sorted before pending; within approved, Lv1 -> Lv2 -> Lv3
+    assert.equal(catalog[0].value, 'Cường');
+    assert.equal(catalog[0].levelIndex, 1);
+    assert.equal(catalog[3].value, 'Bình');
+    assert.equal(catalog[3].status, 'pending');
+
+    // Duplicate display_name values are disambiguated so keys/values stay unique
+    const uniqueValues = new Set(catalog.map((entry) => entry.value));
+    const uniqueKeys = new Set(catalog.map((entry) => entry.key));
+    assert.equal(uniqueValues.size, 4);
+    assert.equal(uniqueKeys.size, 4);
+
+    // buildPlayerSelectOptionsHtml excludes otherAssignedKeys, keeps current selection, and groups by level
+    const otherAssigned = new Set(['cường']);
+    const optHtmlForLv2 = buildPlayerSelectOptionsHtml(catalog, otherAssigned, 'Bình', 2);
+    assert.equal(optHtmlForLv2.includes('>Cường'), false);
+    assert.ok(optHtmlForLv2.includes('value="Bình" selected'));
+    assert.ok(optHtmlForLv2.includes('<optgroup label="Đúng Level 2">'));
+    assert.ok(optHtmlForLv2.includes('<optgroup label="Level khác">'));
+
+    // Non-registered legacy player name stays selectable with (Ngoài ĐK) badge until changed
+    const legacyOptHtml = buildPlayerSelectOptionsHtml(catalog, otherAssigned, 'Minh Khôi', 1);
+    assert.ok(legacyOptHtml.includes('value="Minh Khôi" selected>Minh Khôi (Ngoài ĐK)</option>'));
+
+    // findDuplicateRosterPlayers catches same player across slots/teams (case-insensitive)
+    assert.deepEqual(
+        findDuplicateRosterPlayers([
+            { pair_label: 'A1', level_index: 1, player_1: 'Cường', player_2: 'Bình' },
+            { pair_label: 'B1', level_index: 1, player_1: 'cường', player_2: 'An' }
+        ]).map((d) => ({ name: d.name, slots: d.slots })),
+        [{ name: 'Cường', slots: ['A1', 'B1'] }]
+    );
+    assert.deepEqual(
+        findDuplicateRosterPlayers([
+            { pair_label: 'A1', level_index: 1, player_1: 'Cường', player_2: 'Bình' },
+            { pair_label: 'B1', level_index: 1, player_1: 'Minh Khôi', player_2: '' }
+        ]),
+        []
+    );
+
+    // Admin Teams subtab UI check: concise resize form, single save button, registered dropdowns
+    const state = createInitialDemoState();
+    state.teams = state.teams.slice(0, 2);
+    state.teamPairs = [
+        { id: 'p1', team_id: state.teams[0].id, level_index: 1, pair_label: 'A1', player_1: 'Cường', player_2: 'Legacy Player' },
+        { id: 'p2', team_id: state.teams[1].id, level_index: 1, pair_label: 'B1', player_1: '', player_2: '' }
+    ];
+    const html = renderAdminTab(state, {
+        subtab: 'teams',
+        registrations: [registrations[1], registrations[3], registrations[4]]
+    }, 'supabase');
+
+    assert.ok(html.includes('>Áp dụng</button>'));
+    assert.equal(html.includes('Tăng số đội sẽ giữ nguyên'), false);
+    assert.equal(html.split('data-action="save-all-roster"').length - 1, 1);
+    assert.ok(html.includes('data-action="roster-player-select"'));
+    assert.ok(html.includes('Legacy Player (Ngoài ĐK)'));
+
+    // On pair B1 (empty slots), 'Cường' is already assigned to A1 so must NOT appear in B1's selects
+    const b1Idx = html.indexOf('aria-label="VĐV 1 B1"');
+    assert.ok(b1Idx > -1);
+    const b1EndIdx = html.indexOf('</div>', b1Idx);
+    const b1Html = html.slice(b1Idx, b1EndIdx);
+    assert.equal(b1Html.includes('value="Cường"'), false);
+    assert.ok(b1Html.includes('value="Bình"'));
 });

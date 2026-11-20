@@ -2,18 +2,22 @@ import { createInitialDemoState } from './demo-data.js';
 import { createStore } from './store.js';
 import {
     applyRallyOutcomeToSet,
+    buildPlayerSelectOptionsHtml,
+    buildRegisteredPlayerCatalog,
     buildResizedRoster,
     calculateStandings,
     combineScheduleValue,
     escapeHtml,
     evaluateSubMatch,
     evaluateTeamMatch,
+    findDuplicateRosterPlayers,
     generateRoundRobinSchedule,
     getSkillLevelRank,
     getSubMatchStatusRank,
     normalizeConfig,
     normalizeRallyState,
     normalizeSetPlayerStats,
+    normalizeSkillLevel,
     selectRallyRole,
     swapRallyCourtOrder
 } from './tournament-engine.js';
@@ -159,14 +163,14 @@ function downloadRegistrationsCsv(rows) {
         if (rankDiff !== 0) return rankDiff;
         return String(a.full_name || '').localeCompare(String(b.full_name || ''), 'vi');
     });
-    const header = ['#', 'Họ và tên', 'Tên thi đấu', 'Trình độ (Lv3 → Lv1)', 'Trạng thái', 'Thời gian đăng ký'];
+    const header = ['#', 'Họ và tên', 'Tên thi đấu', 'Trình độ (Lv1 → Lv3)', 'Trạng thái', 'Thời gian đăng ký'];
     const lines = [
         header.map(escapeCsvCell).join(','),
         ...sortedRows.map((r, idx) => [
             idx + 1,
             r.full_name || '',
             r.display_name || r.full_name || '',
-            r.skill_level || '',
+            r.skill_level ? normalizeSkillLevel(r.skill_level) : '',
             r.status === 'approved' ? 'Đã duyệt' : 'Chờ duyệt',
             r.created_at || ''
         ].map(escapeCsvCell).join(','))
@@ -220,6 +224,53 @@ function collectRosterDraftFromDom() {
         }
     }
     return { draftTeams, draftPairs };
+}
+
+function syncRosterPlayerSelects(changedSelect = null) {
+    const selects = Array.from(document.querySelectorAll('#admin-roster-editor .roster-player-select'));
+    if (selects.length === 0) return;
+
+    const catalog = buildRegisteredPlayerCatalog(appState.adminState.registrations || []);
+    if (changedSelect) {
+        const chosenKey = String(changedSelect.value || '').trim().toLowerCase();
+        if (chosenKey) {
+            const conflict = selects.some((sel) => sel !== changedSelect && String(sel.value || '').trim().toLowerCase() === chosenKey);
+            if (conflict) {
+                showToast(`VĐV "${changedSelect.value}" đã được chọn ở vị trí khác!`, true);
+                changedSelect.value = '';
+            }
+        }
+    }
+
+    const chosenKeysAll = new Set();
+    for (const sel of selects) {
+        const val = String(sel.value || '').trim();
+        const key = val.toLowerCase();
+        if (key) chosenKeysAll.add(key);
+
+        const otherAssignedKeys = new Set();
+        for (const other of selects) {
+            if (other === sel) continue;
+            const otherKey = String(other.value || '').trim().toLowerCase();
+            if (otherKey) otherAssignedKeys.add(otherKey);
+        }
+        const lvl = Number(sel.dataset.level) || 1;
+        sel.innerHTML = buildPlayerSelectOptionsHtml(catalog, otherAssignedKeys, val, lvl);
+        sel.value = val;
+    }
+
+    const badge = document.getElementById('roster-pool-badge');
+    if (badge) {
+        if (catalog.length > 0) {
+            const assignedCount = catalog.filter((p) => chosenKeysAll.has(p.key)).length;
+            const remaining = Math.max(0, catalog.length - assignedCount);
+            badge.textContent = `Chờ xếp: ${remaining}/${catalog.length} VĐV`;
+            badge.classList.toggle('is-done', remaining === 0);
+        } else {
+            badge.textContent = 'Chưa có VĐV ĐK';
+            badge.classList.remove('is-done');
+        }
+    }
 }
 
 function showToast(message, isError = false) {
@@ -894,6 +945,9 @@ async function handleAction(action, el, event) {
             showToast('Bảng Vinh Danh & Point đang tạm ẩn bởi Ban tổ chức.');
         } else {
             appState.activeTab = nextTab;
+            if (nextTab === 'admin' && appState.isAdmin && (appState.adminState.subtab === 'registrations' || appState.adminState.subtab === 'teams')) {
+                await loadAdminRegistrations({ rerenderAfter: false });
+            }
         }
         document.body.classList.remove('mobile-header-hidden');
         renderAll();
@@ -963,7 +1017,7 @@ async function handleAction(action, el, event) {
     if (action === 'admin-subtab') {
         if (!appState.isAdmin) return;
         appState.adminState.subtab = el.dataset.subtab || 'scores';
-        if (appState.adminState.subtab === 'registrations') {
+        if (appState.adminState.subtab === 'registrations' || appState.adminState.subtab === 'teams') {
             await loadAdminRegistrations({ rerenderAfter: false });
         }
         renderMainContent();
@@ -1246,8 +1300,14 @@ async function handleAction(action, el, event) {
     if (action === 'save-all-roster') {
         if (!appState.isAdmin) return;
         try {
-            setSaveStatus('Đang lưu đội hình...');
             const { draftTeams, draftPairs } = collectRosterDraftFromDom();
+            const duplicates = findDuplicateRosterPlayers(draftPairs);
+            if (duplicates.length > 0) {
+                const d = duplicates[0];
+                showToast(`VĐV "${d.name}" bị chọn trùng ở ${d.slots.join(', ')}. Mỗi VĐV chỉ được xếp 1 vị trí.`, true);
+                return;
+            }
+            setSaveStatus('Đang lưu đội hình...');
             appState.data = await store.saveAllRoster(draftTeams, draftPairs);
             setSaveStatus('Đã lưu ✓');
             showToast('Đã cập nhật tên đội và đội hình cố định!');
@@ -1435,6 +1495,12 @@ document.addEventListener('change', async (event) => {
         renderMainContent();
         return;
     }
+
+    if (action === 'roster-player-select') {
+        if (!appState.isAdmin) return;
+        syncRosterPlayerSelects(target);
+        return;
+    }
 });
 
 document.addEventListener('input', (event) => {
@@ -1581,8 +1647,14 @@ document.addEventListener('submit', async (event) => {
         }
 
         try {
-            setSaveStatus('Đang cập nhật quy mô...');
             const { draftTeams, draftPairs } = collectRosterDraftFromDom();
+            const duplicates = findDuplicateRosterPlayers(draftPairs);
+            if (duplicates.length > 0) {
+                const d = duplicates[0];
+                showToast(`VĐV "${d.name}" bị chọn trùng ở ${d.slots.join(', ')}. Hãy xử lý trước khi áp dụng.`, true);
+                return;
+            }
+            setSaveStatus('Đang cập nhật quy mô...');
             const currentCfg = normalizeConfig(appState.data.tournament?.config);
             const nextLevelNames = Array.from({ length: targetLevels }, (_, idx) => currentCfg.levelNames[idx] || `Level ${idx + 1}`);
 

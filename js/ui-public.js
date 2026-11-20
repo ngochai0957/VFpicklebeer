@@ -1368,11 +1368,11 @@ export function renderRegisterPage(tournament, options = {}) {
             <div class="reg-header-body">
                 <div class="eyebrow" style="margin-bottom:8px;">
                     <span>VACIF · PICKLEBEER 2026</span>
-                    <span class="pill-status ${config.registrationOpen ? 'pill-live' : 'pill-completed'}">${config.registrationOpen ? 'Đang mở đăng ký' : 'Đã đóng đăng ký'}</span>
+                    <span class="reg-status-pill ${config.registrationOpen ? 'is-open' : 'is-closed'}"><span class="reg-status-dot"></span>${config.registrationOpen ? 'Đang mở đăng ký' : 'Đã đóng đăng ký'}</span>
                 </div>
                 <h1 class="reg-title">Đăng Ký Tham Gia Giải</h1>
                 <p class="reg-desc">
-                    <strong>${escapeHtml(title)}</strong> — Thông tin đăng ký để BTC ghi nhận số lượng tham gia và tiến hành quay cặp đấu, phân đội theo từng trình độ (từ Bậc thầy lão luyện đến Mầm non tập sự).
+                    <strong>${escapeHtml(title)}</strong> — Thông tin đăng ký để BTC ghi nhận số lượng tham gia và tiến hành quay cặp đấu, phân đội theo từng phân hạng (Level 1 - 2 - 3).
                 </p>
                 <div class="reg-required-note"><span class="reg-req">*</span> Biểu thị câu hỏi bắt buộc</div>
             </div>
