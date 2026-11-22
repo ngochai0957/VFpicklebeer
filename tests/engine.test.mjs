@@ -46,6 +46,7 @@ import {
     renderSubMatchHistoryModal,
     renderTeamDetailModal,
     renderTeamMatchCard,
+    renderTeamMatchDetailModal,
     renderTeamsTab,
     renderTvModeView
 } from '../js/ui-public.js';
@@ -287,7 +288,8 @@ test('Admin UI renders all 4 subtabs and clean password-only login modal', () =>
     assert.ok(scoresHtml.includes('level-pill lv-2'));
     assert.ok(scoresHtml.includes('level-pill lv-3'));
     assert.ok(scoresHtml.includes('ĐANG ĐẤU'));
-    assert.ok(scoresHtml.includes('⏳ SẮP ĐẤU'));
+    assert.ok(scoresHtml.includes('Sắp đấu'));
+    assert.ok(scoresHtml.includes('scorer-vs-badge has-score'));
     assert.ok(stylesCss.includes('body.mobile-header-hidden') === false);
     assert.ok(stylesCss.includes('.site-header {\n        position: relative;') || stylesCss.includes('.site-header {\r\n        position: relative;'));
 
@@ -366,7 +368,6 @@ test('Live view hides upcoming pairs, shows ready pairs subdued, and distinguish
     for (const html of [liveTabHtml, tvHtml]) {
         assert.ok(html.includes('Tỉ số đội'));
         assert.ok(html.includes('ppa-sub-card is-live'));
-        assert.ok(html.includes('Mixed Doubles'));
         assert.ok(html.includes('Bo3'));
         assert.ok(html.includes('Set 1'));
         assert.ok(html.includes('Set 2'));
@@ -380,12 +381,20 @@ test('Live view hides upcoming pairs, shows ready pairs subdued, and distinguish
         assert.equal(html.includes('Level 3'), false);
     }
 
-    // 2b. Completed pair renders PPA Tour mixed doubles card with full-row win state & WINNER pill
+    // 2b. Completed matches list shows compact Final Result card with detail popup trigger; popup renders full PPA Tour sub-match cards
     const completedHtml = renderMatchesTab(state, { status: 'completed', round: 'all', teamId: 'all', view: 'list', query: '' }, false);
-    assert.ok(completedHtml.includes('ppa-pair-row is-winner'));
-    assert.ok(completedHtml.includes('ppa-winner-badge'));
-    assert.ok(completedHtml.includes('WINNER'));
-    assert.equal(completedHtml.includes('ppa-cc-cell'), false);
+    assert.ok(completedHtml.includes('tm-card-compact'));
+    assert.ok(completedHtml.includes('data-action="view-match-detail"'));
+    assert.equal(completedHtml.includes('ppa-sub-list'), false);
+
+    const completedMatch = state.teamMatches.find((m) => m.status === 'completed');
+    assert.ok(completedMatch);
+    const detailModalHtml = renderTeamMatchDetailModal(completedMatch.id, state, false);
+    assert.ok(detailModalHtml.includes('match-detail-modal-card'));
+    assert.ok(detailModalHtml.includes('ppa-pair-row is-winner'));
+    assert.ok(detailModalHtml.includes('ppa-winner-badge'));
+    assert.ok(detailModalHtml.includes('WINNER'));
+    assert.equal(detailModalHtml.includes('ppa-cc-cell'), false);
 
     // 3. Admin scores tab exposes all 4 pair queue states & reorder controls
     const adminHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: liveMatch.id }, 'supabase');
@@ -394,8 +403,8 @@ test('Live view hides upcoming pairs, shows ready pairs subdued, and distinguish
     }
     assert.ok(adminHtml.includes('Chưa đấu'));
     assert.ok(adminHtml.includes('Sắp đấu'));
-    assert.ok(adminHtml.includes('● Đang đấu'));
-    assert.ok(adminHtml.includes('✓ Xong'));
+    assert.ok(adminHtml.includes('Đang đấu'));
+    assert.ok(adminHtml.includes('Hoàn thành') || adminHtml.includes('✓ Xong'));
     assert.ok(adminHtml.includes('data-action="move-sub-order"'));
 
     // 4. Smart status sorting surfaces live pairs first, and explicit displayOrder overrides order cleanly
@@ -471,16 +480,16 @@ test('Supports match date + time scheduling and simultaneous multi-court pair as
     assert.equal(san3.live.length, 1);
     assert.equal(san3.live[0].subLabel, 'Level 3');
 
-    // Admin forms include date pickers + per-pair court/schedule inputs (without quick-court preset clutter)
+    // Admin scores tab stays focused on per-pair scoring/overrides; Team Match metadata lives in schedule tab
     const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: liveMatch.id }, 'supabase');
-    assert.ok(adminScoresHtml.includes('name="scheduled_date"'));
-    assert.ok(adminScoresHtml.includes('name="note"'));
-    assert.ok(adminScoresHtml.includes('admin-meta-note-field'));
     assert.equal(adminScoresHtml.includes('data-action="quick-match-court"'), false);
     assert.equal(adminScoresHtml.includes('data-action="assign-multi-courts"'), false);
     assert.ok(adminScoresHtml.includes('data-action="sub-override-field"'));
     const adminSchedHtml = renderAdminTab(state, { subtab: 'schedule', selectedMatchId: liveMatch.id }, 'supabase');
     assert.ok(adminSchedHtml.includes('name="scheduled_date"'));
+    assert.ok(adminSchedHtml.includes('name="note"'));
+    assert.ok(adminSchedHtml.includes('admin-meta-note-field'));
+    assert.ok(adminSchedHtml.includes('data-action="quick-match-status"'));
 });
 
 test('Awards leaderboards rank Best Pair, Top Scorer (regardless of win/loss), and Out/Net Errors', () => {
@@ -521,14 +530,13 @@ test('Awards leaderboards rank Best Pair, Top Scorer (regardless of win/loss), a
     assert.equal(awardsHtml.includes('<script>xss</script>'), false);
     assert.equal(awardsHtml.includes('admin-edit-match'), false);
     assert.ok(awardsHtml.includes('Cặp Đôi Ăn Ý'));
-    assert.ok(awardsHtml.includes('Cặp đôi ăn ý #1'));
-    assert.ok(awardsHtml.includes('Bảng Point Cá Nhân'));
-    assert.ok(awardsHtml.includes('Thống Kê Đánh Out'));
+    assert.ok(awardsHtml.includes('Chiến Thần Tấn Công'));
+    assert.ok(awardsHtml.includes('Bậc Thầy Phòng Thủ'));
     assert.ok(awardsHtml.includes('Tuấn Anh'));
     assert.equal(awardsHtml.includes('Giải Phụ'), false);
 
     const standingsHtml = renderStandingsTab(state, false);
-    assert.ok(standingsHtml.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'));
+    assert.equal(standingsHtml.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'), false);
     assert.equal(standingsHtml.includes('Giải Phụ'), false);
 
     const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: 'tm_r1_ab' }, 'local');
@@ -538,19 +546,20 @@ test('Awards leaderboards rank Best Pair, Top Scorer (regardless of win/loss), a
     assert.equal(adminScoresHtml.includes('data-action="step-score"'), false);
     assert.equal(adminScoresHtml.includes('data-action="toggle-sync-set-score"'), false);
     assert.ok(adminScoresHtml.includes('set-readonly-board'));
-    assert.ok(adminScoresHtml.includes('Out/Lưới'));
+    assert.ok(adminScoresHtml.includes('Tấn công'));
+    assert.ok(adminScoresHtml.includes('Phòng thủ'));
 });
 
 test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on score, and Side-Out controls', () => {
     const pairA = { id: 'pA', player_1: 'Hải Đăng', player_2: 'Gia Huy' };
     const pairB = { id: 'pB', player_1: 'Phúc Lâm', player_2: 'Khánh Duy' };
 
-    // Default Start: Position 1 (Right) a1 serves at Turn 1 to Position 1 (Right) b1
+    // Default Start (PPA Tour 0-0-2): Position 1 (Right) a1 serves at Turn 2 to Position 1 (Right) b1
     let rally = normalizeRallyState(null, pairA, pairB);
     assert.deepEqual(rally, {
         serverSlot: 'a1',
         receiverSlot: 'b1',
-        serveTurn: 1,
+        serveTurn: 2,
         orderA: ['a1', 'a2'],
         orderB: ['b1', 'b2']
     });
@@ -559,7 +568,7 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     rally = swapRallyCourtOrder(rally, 'b', pairA, pairB);
     assert.deepEqual(rally.orderB, ['b2', 'b1']);
 
-    // Selecting receiver on same team as current server automatically switches server to opposite diagonal pos (#2 -> b1)
+    // Selecting receiver on same team as current server automatically switches server to opposite diagonal pos (#2 -> b1) at Serve 1
     rally = selectRallyRole(rally, 'receiver', 'a2', pairA, pairB);
     assert.equal(rally.serverSlot, 'b1');
     assert.equal(rally.receiverSlot, 'a2');
@@ -577,12 +586,12 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     assert.equal(rally.receiverSlot, 'b2');
     assert.equal(rally.serveTurn, 1);
 
-    // Reset to clean orderA=['a1','a2'], orderB=['b1','b2'], a1 -> b1, Serve 1, Set 0:0
+    // Reset to clean PPA Tour 0-0-2: orderA=['a1','a2'], orderB=['b1','b2'], a1 -> b1, Serve 2, Set 0:0
     rally = normalizeRallyState(null, pairA, pairB);
     let stats = normalizeSetPlayerStats(null, 1)[0];
     let score = { a: 0, b: 0 };
 
-    // 1. Server ace -> a1 +1 pt, Set A +1, server side SWAPS court order ([a2, a1] -> a1 now #2 Left) AND receiver switches b1 -> b2 (#2 Left)!
+    // 1. Server ace -> a1 +1 Attack, Set A +1, server side SWAPS court order ([a2, a1] -> a1 now #2 Left) AND receiver switches b1 -> b2 (#2 Left)!
     let res = applyRallyOutcomeToSet(stats, score, rally, 'server-ace', pairA, pairB);
     stats = res.statRow;
     score = res.setScore;
@@ -592,45 +601,66 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     assert.deepEqual(score, { a: 1, b: 0 });
     assert.deepEqual(rally.orderA, ['a2', 'a1']);
     assert.equal(rally.serverSlot, 'a1');
-    assert.equal(rally.serveTurn, 1);
+    assert.equal(rally.serveTurn, 2);
     assert.equal(rally.receiverSlot, 'b2');
 
-    // 2. Receiver error on b2 -> a1 +1 pt, b2 +1 error, Set A +1, server side SWAPS back ([a1, a2] -> a1 #1 Right) AND receiver switches b2 -> b1 (#1 Right)!
-    res = applyRallyOutcomeToSet(stats, score, rally, 'receiver-error', pairA, pairB);
+    // 2. Partner attack -> a2 +1 Attack, Set A +1, server side SWAPS back ([a1, a2] -> a1 #1 Right) AND receiver switches b2 -> b1 (#1 Right)!
+    res = applyRallyOutcomeToSet(stats, score, rally, 'partner-attack', pairA, pairB);
+    stats = res.statRow;
+    score = res.setScore;
+    rally = res.rally;
+    assert.equal(stats.a2.points, 1);
+    assert.equal(stats.a1.points, 1);
+    assert.deepEqual(score, { a: 2, b: 0 });
+    assert.deepEqual(rally.orderA, ['a1', 'a2']);
+    assert.equal(rally.serverSlot, 'a1');
+    assert.equal(rally.serveTurn, 2);
+    assert.equal(rally.receiverSlot, 'b1');
+
+    // 3. Server attack -> a1 +1 Attack (now 2), Set A +1, swaps back to [a2, a1], receiver b2
+    res = applyRallyOutcomeToSet(stats, score, rally, 'server-attack', pairA, pairB);
     stats = res.statRow;
     score = res.setScore;
     rally = res.rally;
     assert.equal(stats.a1.points, 2);
-    assert.equal(stats.b2.errors, 1);
-    assert.deepEqual(score, { a: 2, b: 0 });
-    assert.deepEqual(rally.orderA, ['a1', 'a2']);
-    assert.equal(rally.serverSlot, 'a1');
-    assert.equal(rally.serveTurn, 1);
-    assert.equal(rally.receiverSlot, 'b1');
+    assert.deepEqual(score, { a: 3, b: 0 });
+    assert.equal(rally.receiverSlot, 'b2');
 
-    // 3. Server fault -> +1 server error, 0 Set points, Serve 1 -> partner a2 Serve 2 facing b2
-    res = applyRallyOutcomeToSet(stats, score, rally, 'server-out', pairA, pairB);
+    // 4. Recv1 (b1, Pos 1 Right) defense at Serve 2 -> +1 Defense to b1, 0 Set points, immediate Side-Out to b1 Serve 1 facing a2 (#1 Right)
+    res = applyRallyOutcomeToSet(stats, score, rally, 'recv1-defense', pairA, pairB);
+    stats = res.statRow;
+    score = res.setScore;
+    rally = res.rally;
+    assert.equal(stats.b1.errors, 1);
+    assert.deepEqual(score, { a: 3, b: 0 });
+    assert.equal(rally.serverSlot, 'b1');
+    assert.equal(rally.serveTurn, 1);
+    assert.equal(rally.receiverSlot, 'a2');
+
+    // 5. Serve fault on b1 (Serve 1) -> 0 stats change (add-only, never subtract), 0 Set points, Serve 1 -> partner b2 Serve 2 facing a1
+    res = applyRallyOutcomeToSet(stats, score, rally, 'serve-fault', pairA, pairB);
+    stats = res.statRow;
+    score = res.setScore;
+    rally = res.rally;
+    assert.equal(stats.b1.errors, 1);
+    assert.equal(stats.b1.points, 0);
+    assert.deepEqual(score, { a: 3, b: 0 });
+    assert.equal(rally.serverSlot, 'b2');
+    assert.equal(rally.serveTurn, 2);
+    assert.equal(rally.receiverSlot, 'a1');
+
+    // 6. Recv2 (a1, Pos 2 Left of orderA=[a2,a1]) defense at Serve 2 -> +1 Defense to a1, 0 Set points, Side-Out to a2 (#1 Right) Serve 1 facing b1
+    res = applyRallyOutcomeToSet(stats, score, rally, 'recv2-defense', pairA, pairB);
     stats = res.statRow;
     score = res.setScore;
     rally = res.rally;
     assert.equal(stats.a1.errors, 1);
-    assert.deepEqual(score, { a: 2, b: 0 });
+    assert.deepEqual(score, { a: 3, b: 0 });
     assert.equal(rally.serverSlot, 'a2');
-    assert.equal(rally.serveTurn, 2);
-    assert.equal(rally.receiverSlot, 'b2');
-
-    // 4. Receiver wins rally on b2 -> +1 pt b2, 0 Set points, Serve 2 -> Side-out to b1 Serve 1 facing a1
-    res = applyRallyOutcomeToSet(stats, score, rally, 'receiver-win', pairA, pairB);
-    stats = res.statRow;
-    score = res.setScore;
-    rally = res.rally;
-    assert.equal(stats.b2.points, 1);
-    assert.deepEqual(score, { a: 2, b: 0 });
-    assert.equal(rally.serverSlot, 'b1');
     assert.equal(rally.serveTurn, 1);
-    assert.equal(rally.receiverSlot, 'a1');
+    assert.equal(rally.receiverSlot, 'b1');
 
-    // Admin UI places WIN badge beside winning team (A1 WIN on A side, B2 WIN on B side), with exact 4 action labels
+    // Admin UI places WIN badge beside winning team (A1 WIN on A side, B2 WIN on B side), with exact 6 PPA action buttons
     const state = createInitialDemoState();
     const adminHtml = renderAdminTab(state, {
         subtab: 'scores',
@@ -645,19 +675,20 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     assert.match(adminHtml, /WIN<\/span>\s*<span class="set-team-tag"[^>]*>A1<\/span>/);
     assert.match(adminHtml, /<span class="set-team-tag"[^>]*>B2<\/span>\s*<span class="set-auto-badge win">[^<]*WIN<\/span>/);
     assert.equal(adminHtml.includes('SIDE-OUT'), false);
-    assert.ok(adminHtml.includes('tấn công chính xác'));
-    assert.ok(adminHtml.includes('đỡ hỏng'));
-    assert.ok(adminHtml.includes('phát hỏng'));
-    assert.ok(adminHtml.includes('phòng thủ thành công'));
+    assert.equal(adminHtml.includes('data-outcome="server-ace"'), false);
+    assert.ok(adminHtml.includes('tấn công'));
+    assert.ok(adminHtml.includes('phòng thủ'));
+    assert.ok(adminHtml.includes('Phát hỏng'));
     assert.ok(adminHtml.includes('data-action="swap-court-order"'));
     assert.ok(adminHtml.includes('1 · Phải'));
     assert.ok(adminHtml.includes('2 · Trái'));
     assert.ok(adminHtml.includes('data-action="select-rally-role"'));
     assert.ok(adminHtml.includes('data-action="set-serve-turn"'));
-    assert.ok(adminHtml.includes('data-outcome="server-ace"'));
-    assert.ok(adminHtml.includes('data-outcome="receiver-error"'));
-    assert.ok(adminHtml.includes('data-outcome="server-out"'));
-    assert.ok(adminHtml.includes('data-outcome="receiver-win"'));
+    assert.ok(adminHtml.includes('data-outcome="server-attack"'));
+    assert.ok(adminHtml.includes('data-outcome="partner-attack"'));
+    assert.ok(adminHtml.includes('data-outcome="recv1-defense"'));
+    assert.ok(adminHtml.includes('data-outcome="recv2-defense"'));
+    assert.ok(adminHtml.includes('data-outcome="serve-fault"'));
     assert.ok(adminHtml.includes('data-action="undo-rally-outcome"'));
     assert.ok(adminHtml.includes('data-action="reset-set-stats"'));
     assert.ok(adminHtml.includes('Hoàn tác (1)'));
@@ -739,7 +770,7 @@ test('Google-Form-style player registration page and Admin registrations dashboa
         registrations: sampleRegs,
         registrationsTableMissing: true
     }, 'supabase');
-    assert.ok(adminRegHtml.includes('Đăng Ký VĐV (3)'));
+    assert.ok(adminRegHtml.includes('Đăng Ký (3)'));
     assert.ok(adminRegHtml.includes('CREATE TABLE IF NOT EXISTS public.player_registrations'));
     assert.ok(adminRegHtml.includes('data-action="copy-register-link"'));
     assert.ok(adminRegHtml.includes('data-action="export-registrations-csv"'));
@@ -805,7 +836,7 @@ test('Awards visibility supports public, anonymous codenames (no leaks), and hid
     const hiddenAwardsAdmin = renderAwardsTab(hiddenState, {}, true);
     assert.ok(hiddenAwardsAdmin.includes(topPlayerName));
     assert.ok(hiddenAwardsAdmin.includes('data-action="set-awards-visibility"'));
-    assert.ok(renderStandingsTab(hiddenState, true).includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'));
+    assert.equal(renderStandingsTab(hiddenState, true).includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'), false);
 
     // 2. Anonymous mode: per-session 3-digit codes ("Cặp đôi XXX" / "Cá nhân XXX"), centered "?" team cells, no match details
     const anonState = {
@@ -819,16 +850,13 @@ test('Awards visibility supports public, anonymous codenames (no leaks), and hid
     const anonAwardsPublic = renderAwardsTab(anonState, { query: topPlayerName, teamId: state.teams[0].id }, false, 101);
     const anonAwardsReloaded = renderAwardsTab(anonState, {}, false, 202);
 
-    assert.ok(anonStandingsPublic.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'));
-    assert.ok(anonStandingsPublic.includes(topPointsLabel));
-    assert.ok(anonAwardsPublic.includes('Bảng Vinh Danh &amp; Point Cá Nhân'));
-    assert.ok(anonAwardsPublic.includes('Cặp đôi ăn ý #1'));
+    assert.equal(anonStandingsPublic.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'), false);
+    assert.ok(anonAwardsPublic.includes('Bảng Xếp Hạng'));
+    assert.ok(anonAwardsPublic.includes(topPointsLabel));
     assert.ok(anonAwardsPublic.includes(String(topPlayer.totalPoints)));
-    assert.ok(anonAwardsPublic.includes('<th>Đội &amp; Level</th>'));
-    assert.ok(anonAwardsPublic.includes('<th>Đội · Cặp</th>'));
+    assert.ok(anonAwardsPublic.includes('<th>Đội</th>'));
     assert.ok(anonAwardsPublic.includes('<td>\n                    <span class="team-code-dot sm" style="background:#64748b">?</span>'));
-    assert.equal(anonAwardsPublic.includes('<th class="col-left">Đội &amp; Level</th>'), false);
-    assert.equal(anonAwardsPublic.includes('<th class="col-left">Đội · Cặp</th>'), false);
+    assert.equal(anonAwardsPublic.includes('<th class="col-left">Đội</th>'), false);
     assert.equal(anonAwardsPublic.includes('Giải Phụ'), false);
     assert.equal(anonAwardsPublic.includes('Chế độ Ẩn danh đang bật'), false);
     assert.equal(anonAwardsPublic.includes('Đội ẩn danh'), false);
@@ -843,8 +871,7 @@ test('Awards visibility supports public, anonymous codenames (no leaks), and hid
 
     // Admin still gets left-aligned team/level/pair columns with real names and details
     const anonAwardsAdmin = renderAwardsTab(anonState, {}, true, 101);
-    assert.ok(anonAwardsAdmin.includes('<th class="col-left">Đội &amp; Level</th>'));
-    assert.ok(anonAwardsAdmin.includes('<th class="col-left">Đội · Cặp</th>'));
+    assert.ok(anonAwardsAdmin.includes('<th class="col-left">Đội</th>'));
     assert.ok(anonAwardsAdmin.includes(topPlayerName));
 
     for (const realTeam of realTeamNames) {
@@ -868,7 +895,7 @@ test('Awards visibility supports public, anonymous codenames (no leaks), and hid
     assert.equal(maskedSeed101.pairRows[0].levelName, '?');
     assert.equal(maskedSeed101.playerBoard.byPoints[0].pairLabel, '?');
     assert.deepEqual(maskedSeed101.playerBoard.byPoints[0].matchLogs, []);
-    assert.ok(anonStandingsPublic.includes(maskedSeed101.playerBoard.byPoints[0].name));
+    assert.equal(anonStandingsPublic.includes(maskedSeed101.playerBoard.byPoints[0].name), false);
     assert.ok(anonAwardsPublic.includes(maskedSeed101.playerBoard.byPoints[0].name));
     assert.ok(anonAwardsReloaded.includes(maskedSeed202.playerBoard.byPoints[0].name));
     assert.notEqual(maskedSeed101.playerBoard.byPoints[0].name, maskedSeed202.playerBoard.byPoints[0].name);
@@ -961,7 +988,7 @@ test('roster player catalog, exclusive select options, duplicate detection, and 
     assert.ok(html.includes('Legacy Player (Ngoài ĐK)'));
 
     // On pair B1 (empty slots), 'Cường' is already assigned to A1 so must NOT appear in B1's selects
-    const b1Idx = html.indexOf('aria-label="VĐV 1 B1"');
+    const b1Idx = html.indexOf('aria-label="Người chơi 1 B1"');
     assert.ok(b1Idx > -1);
     const b1EndIdx = html.indexOf('</div>', b1Idx);
     const b1Html = html.slice(b1Idx, b1EndIdx);
@@ -983,7 +1010,7 @@ test('persistent per-set rally history log, analytics summary, and play-by-play 
     let statRow = normalizeSetPlayerStats(null, 1)[0];
     const logs = [];
 
-    const sequence = ['server-ace', 'receiver-error', 'server-out', 'receiver-win'];
+    const sequence = ['server-ace', 'partner-attack', 'recv1-defense', 'serve-fault', 'recv2-defense'];
     sequence.forEach((outcome, i) => {
         const res = applyRallyOutcomeToSet(statRow, score, rally, outcome, pairA, pairB);
         const entry = createRallyLogEntry({
@@ -1003,36 +1030,39 @@ test('persistent per-set rally history log, analytics summary, and play-by-play 
         rally = res.rally;
     });
 
-    assert.equal(logs.length, 4);
-    assert.equal(logs[0].call, '0-0-1');
+    assert.equal(logs.length, 5);
+    assert.equal(logs[0].call, '0-0-2');
     assert.equal(logs[0].scored, true);
     assert.equal(logs[0].a, 1);
-    assert.equal(logs[1].call, '1-0-1');
+    assert.equal(logs[1].call, '1-0-2');
     assert.equal(logs[1].a, 2);
-    // Rally 3 server-out stays with Side A Serve 2; Rally 4 receiver-win causes Side-Out to Side B!
-    assert.equal(logs[2].sideOut, false);
-    assert.equal(logs[2].nextTurn, 2);
-    assert.equal(logs[3].sideOut, true);
-    assert.equal(logs[3].nextTurn, 1);
+    // Rally 3 recv1-defense at 2-0-2 causes immediate Side-Out to Side B Serve 1!
+    assert.equal(logs[2].sideOut, true);
+    assert.equal(logs[2].nextTurn, 1);
+    // Rally 4 serve-fault at 0-2-1 stays with Side B Serve 2; Rally 5 recv2-defense causes Side-Out back to Side A Serve 1!
+    assert.equal(logs[3].sideOut, false);
+    assert.equal(logs[3].nextTurn, 2);
+    assert.equal(logs[4].sideOut, true);
+    assert.equal(logs[4].nextTurn, 1);
 
     const normalized = normalizeSetRallyLogs([logs, [{ invalid: true }]], 2);
-    assert.equal(normalized[0].length, 4);
+    assert.equal(normalized[0].length, 5);
     assert.equal(normalized[1].length, 0);
 
     const summary = summarizeSetRallyLog(normalized[0]);
-    assert.equal(summary.totalRallies, 4);
+    assert.equal(summary.totalRallies, 5);
     assert.equal(summary.scoringRallies, 2);
-    assert.equal(summary.sideOuts, 1);
+    assert.equal(summary.sideOuts, 2);
     assert.equal(summary.maxRunA, 2);
     assert.equal(summary.largestLeadA, 2);
-    assert.equal(summary.timeline.length, 5);
+    assert.equal(summary.timeline.length, 6);
 
     sm.sets = [{ a: score.a, b: score.b }];
     sm.format_override = { ...(sm.format_override || {}), setPlayerStats: [statRow], setRallyLogs: normalized };
 
     const adminHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: tm.id }, 'supabase');
     assert.ok(adminHtml.includes(`data-action="view-set-history" data-sub-id="${sm.id}" data-set-idx="0"`));
-    assert.ok(adminHtml.includes('Chi tiết (4)'));
+    assert.ok(adminHtml.includes('Chi tiết (5)'));
 
     const publicCardHtml = renderTeamMatchCard(tm, {
         teamsMap,
@@ -1046,5 +1076,5 @@ test('persistent per-set rally history log, analytics summary, and play-by-play 
     assert.ok(modalHtml.includes('Chi Tiết Diễn Biến Từng Lượt'));
     assert.ok(modalHtml.includes('history-svg'));
     assert.ok(modalHtml.includes('⇄ Đổi giao'));
-    assert.ok(modalHtml.includes('0-0-1'));
+    assert.ok(modalHtml.includes('0-0-2'));
 });

@@ -59,14 +59,26 @@ function buildPpaPairRowHtml({
     const sets = ev.sets || [];
 
     const winnerBadgeHtml = isRowWinner
-        ? '<span class="ppa-winner-badge">&#10003; WINNER</span>'
+        ? '<span class="ppa-winner-badge" title="Thắng cặp đấu">&#10003; WINNER</span>'
         : '';
+
+    const playerLines = String(playersText || '')
+        .split(/\s*\/\s*/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const playersLinesHtml = (playerLines.length > 0 ? playerLines : [pairLabel])
+        .map((name) => `<span class="ppa-player-line" title="${escapeHtml(name)}">${escapeHtml(name)}</span>`)
+        .join('');
 
     const identityHtml = `
         <div class="ppa-pair-info">
-            <span class="ppa-pair-seed" style="color:${escapeHtml(team.color)}">${escapeHtml(pairLabel)}</span>
-            <span class="ppa-pair-names">${escapeHtml(playersText)}</span>
-            ${winnerBadgeHtml}
+            <div class="ppa-pair-seed-col">
+                <span class="ppa-pair-seed" style="color:${escapeHtml(team.color)}">${escapeHtml(pairLabel)}</span>
+                ${winnerBadgeHtml}
+            </div>
+            <div class="ppa-pair-names">
+                ${playersLinesHtml}
+            </div>
         </div>
     `;
 
@@ -200,7 +212,7 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
             return `
                 <div class="ppa-sub-card ${isSubReady ? 'is-ready' : 'is-upcoming'} lv-${lvlTier}">
                     <div class="ppa-sub-head">
-                        <span class="ppa-sub-division"><span class="ppa-level-chip lv-${lvlTier}">${escapeHtml(levelLabel)}</span> · Mixed Doubles</span>
+                        <span class="ppa-sub-division"><span class="ppa-level-chip lv-${lvlTier}">${escapeHtml(levelLabel)}</span></span>
                         <div class="ppa-sub-meta">
                             ${subSchedulePillHtml}
                             <span class="ppa-bo-tag">${boLabel}</span>
@@ -263,7 +275,7 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
         return `
             <div class="ppa-sub-card ${isSubLive ? 'is-live' : ''} ${isSubCompleted ? 'is-completed' : ''} lv-${lvlTier}">
                 <div class="ppa-sub-head">
-                    <span class="ppa-sub-division"><span class="ppa-level-chip lv-${lvlTier}">${escapeHtml(levelLabel)}</span> · Mixed Doubles</span>
+                    <span class="ppa-sub-division"><span class="ppa-level-chip lv-${lvlTier}">${escapeHtml(levelLabel)}</span></span>
                     <div class="ppa-sub-meta">
                         ${subSchedulePillHtml}
                         <span class="ppa-bo-tag">${boLabel}</span>
@@ -283,13 +295,91 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
         `;
     }).join('');
 
-    const adminShortcut = isAdmin
-        ? `<button type="button" class="btn btn-amber btn-sm" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Sửa tỉ số</button>`
+    const adminShortcut = (isAdmin && evalTm.effectiveStatus !== 'completed')
+        ? `<button type="button" class="btn btn-amber btn-sm" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Cập nhật</button>`
         : '';
 
     const emptyRowsNotice = liveOnly
         ? '<div class="section-sub" style="padding:18px;text-align:center;">Chưa có cặp nào đang đấu (hãy bật <strong>Đang đấu LIVE</strong> hoặc <strong>Sắp đấu</strong> cho cặp trong Quản trị).</div>'
         : '<div class="section-sub" style="padding:16px;text-align:center;">Chưa có cặp đấu nào bắt đầu.</div>';
+
+    const compactSummary = Boolean(options.compactSummary);
+    const searchQuery = String(options.searchQuery || '').trim();
+
+    const leadingA = evalTm.winner === 'A' || evalTm.subWinsA > evalTm.subWinsB;
+    const leadingB = evalTm.winner === 'B' || evalTm.subWinsB > evalTm.subWinsA;
+    const trailingA = evalTm.winner === 'B' || evalTm.subWinsA < evalTm.subWinsB;
+    const trailingB = evalTm.winner === 'A' || evalTm.subWinsB < evalTm.subWinsA;
+
+    const buildScoreboardRowsHtml = () => `
+        <span class="sr-only">Tỉ số đội</span>
+        <div class="tm-score-row ${evalTm.winner === 'A' ? 'winner' : ''}">
+            <div class="tm-side">
+                <span class="team-code-dot sm" style="background:${escapeHtml(teamA.color)}">${escapeHtml(teamA.code)}</span>
+                <span class="tm-side-name" title="${escapeHtml(teamA.name)}">${escapeHtml(teamA.name)}</span>
+                ${evalTm.winner === 'A' ? '<span class="tm-winner-tag">Thắng</span>' : ''}
+            </div>
+            <span class="tm-side-score tabular ${leadingA ? 'is-leading' : (trailingA ? 'is-trailing' : '')}">${evalTm.subWinsA}</span>
+        </div>
+        <div class="tm-score-row ${evalTm.winner === 'B' ? 'winner' : ''}">
+            <div class="tm-side">
+                <span class="team-code-dot sm" style="background:${escapeHtml(teamB.color)}">${escapeHtml(teamB.code)}</span>
+                <span class="tm-side-name" title="${escapeHtml(teamB.name)}">${escapeHtml(teamB.name)}</span>
+                ${evalTm.winner === 'B' ? '<span class="tm-winner-tag">Thắng</span>' : ''}
+            </div>
+            <span class="tm-side-score tabular ${leadingB ? 'is-leading' : (trailingB ? 'is-trailing' : '')}">${evalTm.subWinsB}</span>
+        </div>
+    `;
+
+    if (compactSummary) {
+        let matchedPlayersHtml = '';
+        if (searchQuery) {
+            const qNorm = normalizeQuery(searchQuery);
+            const matchedNames = [];
+            for (const sm of evalTm.subMatches) {
+                const pA = sm.pair_a_id ? pairsMap.get(sm.pair_a_id) : null;
+                const pB = sm.pair_b_id ? pairsMap.get(sm.pair_b_id) : null;
+                for (const name of [pA?.player_1, pA?.player_2, pB?.player_1, pB?.player_2]) {
+                    if (name && normalizeQuery(name).includes(qNorm) && !matchedNames.includes(name)) {
+                        matchedNames.push(name);
+                    }
+                }
+            }
+            if (matchedNames.length > 0) {
+                matchedPlayersHtml = `<div class="tm-matched-players"><strong>${escapeHtml(matchedNames.join(', '))}</strong></div>`;
+            }
+        }
+
+        return `
+            <article class="tm-card tm-card-compact ${isLive ? 'is-live' : ''}">
+                <div class="tm-card-top">
+                    <div class="tm-meta">
+                        <span class="tag ${tm.stage === 'playoff' ? 'tag-playoff' : 'tag-round'}">${escapeHtml(tm.round_name)}</span>
+                        ${headerCourtText ? `<span>${escapeHtml(headerCourtText)}</span>` : ''}
+                        ${headerSchedText ? `<span>· ${escapeHtml(headerSchedText)}</span>` : ''}
+                    </div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        ${getStatusBadgeHtml(evalTm.effectiveStatus)}
+                        ${adminShortcut}
+                    </div>
+                </div>
+
+                <div class="tm-scoreboard-head is-clickable" role="button" tabindex="0" data-action="view-match-detail" data-match-id="${escapeHtml(tm.id)}" aria-label="Xem chi tiết trận ${escapeHtml(teamA.name)} gặp ${escapeHtml(teamB.name)}">
+                    ${buildScoreboardRowsHtml()}
+                </div>
+
+                <div class="tm-summary-foot">
+                    <div class="tm-summary-info">
+                        ${matchedPlayersHtml}
+                    </div>
+                    <button type="button" class="tm-detail-trigger" data-action="view-match-detail" data-match-id="${escapeHtml(tm.id)}">
+                        Xem chi tiết &rarr;
+                    </button>
+                </div>
+                ${tm.note ? `<div class="section-sub" style="padding:8px 18px 10px;border-top:1px solid var(--line);">Ghi chú: ${escapeHtml(tm.note)}</div>` : ''}
+            </article>
+        `;
+    }
 
     return `
         <article class="tm-card ${isLive ? 'is-live' : ''}">
@@ -306,30 +396,7 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
             </div>
 
             <div class="tm-scoreboard-head">
-                <div class="tm-side ${evalTm.winner === 'A' ? 'winner' : ''}">
-                    <span class="team-code-dot" style="background:${escapeHtml(teamA.color)}">${escapeHtml(teamA.code)}</span>
-                    <div class="tm-side-info">
-                        <div class="tm-side-name">${escapeHtml(teamA.name)}</div>
-                        ${evalTm.winner === 'A' ? '<span class="tm-winner-tag">Thắng đối đầu</span>' : ''}
-                    </div>
-                </div>
-
-                <div class="tm-center-wrap">
-                    <span class="tm-center-label">Tỉ số đội</span>
-                    <div class="tm-center-score tabular">
-                        <span>${evalTm.subWinsA}</span>
-                        <span class="sep">:</span>
-                        <span>${evalTm.subWinsB}</span>
-                    </div>
-                </div>
-
-                <div class="tm-side right ${evalTm.winner === 'B' ? 'winner' : ''}">
-                    <span class="team-code-dot" style="background:${escapeHtml(teamB.color)}">${escapeHtml(teamB.code)}</span>
-                    <div class="tm-side-info">
-                        <div class="tm-side-name">${escapeHtml(teamB.name)}</div>
-                        ${evalTm.winner === 'B' ? '<span class="tm-winner-tag">Thắng đối đầu</span>' : ''}
-                    </div>
-                </div>
+                ${buildScoreboardRowsHtml()}
             </div>
 
             <div class="ppa-sub-list">
@@ -372,23 +439,12 @@ export function renderLiveSpotlight(state, isAdmin, compact = true) {
         const teamB = teamsMap.get(tm.team_b_id);
         if (!teamA || !teamB) return '';
         const evalTm = evaluateTeamMatch(tm, state.subMatches, config);
-        const activeSub = evalTm.subMatches.find((s) => s.eval.effectiveStatus === 'live');
-        const readySub = evalTm.subMatches.find((s) => s.eval.effectiveStatus === 'ready');
-
-        let activeLine = 'Đang chuẩn bị lên sân';
-        if (activeSub) {
-            const lvl = config.levelNames[activeSub.level_index - 1] || `Level ${activeSub.level_index}`;
-            const sets = activeSub.eval.sets || [];
-            const setsText = sets.map((s, idx) => `S${idx + 1}: ${s.a}-${s.b}`).join(' · ');
-            activeLine = `${lvl} (${activeSub.eval.setsWonA}-${activeSub.eval.setsWonB}) · ${setsText}`;
-        } else if (readySub) {
-            const lvl = config.levelNames[readySub.level_index - 1] || `Level ${readySub.level_index}`;
-            activeLine = `Sắp đấu: ${lvl}`;
-        }
+        const leadingA = evalTm.subWinsA > evalTm.subWinsB;
+        const leadingB = evalTm.subWinsB > evalTm.subWinsA;
 
         const actionBtn = isAdmin
-            ? `<button type="button" class="link-btn" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Sửa tỉ số &rarr;</button>`
-            : `<button type="button" class="link-btn" data-action="filter-round-btn" data-round="${escapeHtml(tm.round_name)}">Xem chi tiết &rarr;</button>`;
+            ? `<button type="button" class="link-btn" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Cập nhật &rarr;</button>`
+            : `<button type="button" class="link-btn" data-action="view-match-detail" data-match-id="${escapeHtml(tm.id)}">Xem chi tiết &rarr;</button>`;
 
         const courtText = getTeamMatchCourts(evalTm.subMatches, tm).join(' · ');
         const schedText = formatScheduleRaw(tm.scheduled_time);
@@ -399,20 +455,24 @@ export function renderLiveSpotlight(state, isAdmin, compact = true) {
                     <span>${escapeHtml(tm.round_name)}${courtText ? ` · ${escapeHtml(courtText)}` : ''}${schedText ? ` · ${escapeHtml(schedText)}` : ''}</span>
                     <span class="tag tag-status-live"><span class="pulse-dot"></span>LIVE</span>
                 </div>
-                <div class="live-mini-teams">
-                    <div class="live-mini-team">
-                        <span class="team-code-dot sm" style="background:${escapeHtml(teamA.color)}">${escapeHtml(teamA.code)}</span>
-                        <span class="live-mini-team-name">${escapeHtml(teamA.name)}</span>
+                <div class="live-mini-teams is-clickable" role="button" tabindex="0" data-action="view-match-detail" data-match-id="${escapeHtml(tm.id)}">
+                    <div class="live-mini-row">
+                        <div class="live-mini-team">
+                            <span class="team-code-dot sm" style="background:${escapeHtml(teamA.color)}">${escapeHtml(teamA.code)}</span>
+                            <span class="live-mini-team-name" title="${escapeHtml(teamA.name)}">${escapeHtml(teamA.name)}</span>
+                        </div>
+                        <span class="live-mini-side-score tabular ${leadingA ? 'is-leading' : ''}">${evalTm.subWinsA}</span>
                     </div>
-                    <div class="live-mini-score tabular">${evalTm.subWinsA} : ${evalTm.subWinsB}</div>
-                    <div class="live-mini-team right">
-                        <span class="team-code-dot sm" style="background:${escapeHtml(teamB.color)}">${escapeHtml(teamB.code)}</span>
-                        <span class="live-mini-team-name">${escapeHtml(teamB.name)}</span>
+                    <div class="live-mini-row">
+                        <div class="live-mini-team">
+                            <span class="team-code-dot sm" style="background:${escapeHtml(teamB.color)}">${escapeHtml(teamB.code)}</span>
+                            <span class="live-mini-team-name" title="${escapeHtml(teamB.name)}">${escapeHtml(teamB.name)}</span>
+                        </div>
+                        <span class="live-mini-side-score tabular ${leadingB ? 'is-leading' : ''}">${evalTm.subWinsB}</span>
                     </div>
                 </div>
                 <div class="live-mini-subrow">
-                    <span>${escapeHtml(activeLine)}</span>
-                    ${actionBtn}
+                    <div class="live-mini-actions">${actionBtn}</div>
                 </div>
             </article>
         `;
@@ -431,13 +491,36 @@ export function renderLiveSpotlight(state, isAdmin, compact = true) {
     `;
 }
 
-export function renderStandingsTab(state, isAdmin, maskSeed = null) {
+export function renderPlayoffSection(state, isAdmin = false) {
     const config = normalizeConfig(state.tournament?.config);
-    const standings = calculateStandings(state.teams, state.teamMatches, state.subMatches, config);
     const teamsMap = new Map((state.teams || []).map((t) => [t.id, t]));
     const pairsMap = new Map((state.teamPairs || []).map((p) => [p.id, p]));
     const playoffMatches = (state.teamMatches || []).filter((tm) => tm.stage === 'playoff');
+    if (playoffMatches.length === 0) return '';
+
+    return `
+        <section class="section-block">
+            <div class="section-header">
+                <h2 class="section-title">Vòng Chung Kết &amp; Playoff</h2>
+                <span class="section-sub">Các trận phân hạng trực tiếp</span>
+            </div>
+            <div class="matches-stack">
+                ${playoffMatches.map((tm) => renderTeamMatchCard(tm, {
+        teamsMap,
+        pairsMap,
+        subMatches: state.subMatches || [],
+        config
+    }, isAdmin)).join('')}
+            </div>
+        </section>
+    `;
+}
+
+export function renderStandingsTab(state, isAdmin, maskSeed = null, options = {}) {
+    const config = normalizeConfig(state.tournament?.config);
+    const standings = calculateStandings(state.teams, state.teamMatches, state.subMatches, config);
     const showCutline = standings.length >= 4;
+    const includePlayoff = options.includePlayoff !== false;
 
     const rowsHtml = standings.map((row) => {
         const rankClass = row.rank <= 3 ? `rank-${row.rank}` : '';
@@ -465,7 +548,6 @@ export function renderStandingsTab(state, isAdmin, maskSeed = null) {
                         </span>
                     </button>
                 </td>
-                <td class="tabular">${row.teamMatchesPlayed}</td>
                 <td class="tabular">
                     <span class="stat-highlight">${row.teamMatchWins}</span>
                     <span class="sub-caption">${row.teamMatchWins}W-${row.teamMatchLosses}L</span>
@@ -484,49 +566,12 @@ export function renderStandingsTab(state, isAdmin, maskSeed = null) {
         `;
     }).join('');
 
-    const playoffSection = playoffMatches.length > 0
-        ? `
-            <div class="section-block" style="margin-top:34px;">
-                <div class="section-header">
-                    <h2 class="section-title">Vòng Chung Kết &amp; Playoff</h2>
-                    <span class="section-sub">Các trận phân hạng trực tiếp</span>
-                </div>
-                <div class="matches-stack">
-                    ${playoffMatches.map((tm) => renderTeamMatchCard(tm, {
-            teamsMap,
-            pairsMap,
-            subMatches: state.subMatches || [],
-            config
-        }, isAdmin)).join('')}
-                </div>
-            </div>
-        `
-        : '';
-
-    const showAwardsPreview = isAdmin || config.awardsVisibility !== 'hidden';
-    let awardsPreview = '';
-    if (showAwardsPreview) {
-        let previewPairs = calculatePairLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
-        let previewPlayerStats = calculatePlayerLeaderboard(state.teams, state.teamPairs, state.teamMatches, state.subMatches, config);
-        if (!isAdmin && config.awardsVisibility === 'anonymous') {
-            const resolvedSeed = Number.isFinite(Number(maskSeed)) && Number(maskSeed) >= 1
-                ? Math.floor(Number(maskSeed))
-                : config.awardsMaskSeed;
-            const masked = anonymizeAwardsLeaderboards(previewPairs, previewPlayerStats, resolvedSeed);
-            previewPairs = masked.pairRows;
-            previewPlayerStats = masked.playerBoard;
-        }
-        const pairTop = previewPairs[0];
-        const scorerTop = previewPlayerStats.byPoints[0];
-        const errorTop = previewPlayerStats.byErrors[0];
-        awardsPreview = renderAwardsCardsHtml(pairTop, scorerTop, errorTop, true);
-    }
+    const playoffSection = includePlayoff ? renderPlayoffSection(state, isAdmin) : '';
 
     return `
         <section class="section-block">
             <div class="section-header">
-                <h2 class="section-title">Bảng Xếp Hạng</h2>
-                <span class="section-sub">Nhấn tên đội để xem đội hình cố định${showCutline ? ' · Nét đứt đánh dấu Top 2' : ''}</span>
+                <h2 class="section-title">Bảng thống kê chi tiết</h2>
             </div>
 
             <div class="card">
@@ -536,7 +581,6 @@ export function renderStandingsTab(state, isAdmin, maskSeed = null) {
                             <tr>
                                 <th style="width:58px;">#</th>
                                 <th class="col-left">Đội</th>
-                                <th>Đã đấu</th>
                                 <th>TM Thắng</th>
                                 <th>Trận cặp</th>
                                 <th>Set</th>
@@ -545,7 +589,7 @@ export function renderStandingsTab(state, isAdmin, maskSeed = null) {
                             </tr>
                         </thead>
                         <tbody>
-                            ${rowsHtml || '<tr><td colspan="8" style="padding:28px;color:var(--muted);">Chưa có đội tham gia.</td></tr>'}
+                            ${rowsHtml || '<tr><td colspan="7" style="padding:28px;color:var(--muted);">Chưa có đội tham gia.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -558,7 +602,6 @@ export function renderStandingsTab(state, isAdmin, maskSeed = null) {
             </div>
 
             ${playoffSection}
-            ${awardsPreview}
         </section>
     `;
 }
@@ -586,7 +629,7 @@ function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = fal
         ? `
             <div class="award-winner-name">${escapeHtml(pairTop.playersText)}</div>
             <div class="award-meta">
-                ${renderTeamMetaHtml(pairTop.team, `${pairTop.team.name} · ${pairTop.levelName}`)}
+                ${renderTeamMetaHtml(pairTop.team, pairTop.team.name)}
             </div>
             <div class="award-stat-row tabular">
                 <strong>${pairTop.wins} thắng - ${pairTop.losses} thua</strong>
@@ -599,27 +642,27 @@ function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = fal
         ? `
             <div class="award-winner-name">${escapeHtml(scorerTop.name)}</div>
             <div class="award-meta">
-                ${renderTeamMetaHtml(scorerTop.team, `${scorerTop.team.name} (${scorerTop.pairLabel || '-'})`)}
+                ${renderTeamMetaHtml(scorerTop.team, scorerTop.team.name)}
             </div>
             <div class="award-stat-row tabular">
                 <strong>${scorerTop.totalPoints} điểm</strong>
                 <span>${scorerTop.matchesPlayed} trận · TB ${scorerTop.avgPoints}đ/trận</span>
             </div>
         `
-        : '<div class="section-sub">Chưa có điểm cá nhân nào được ghi nhận.</div>';
+        : '<div class="section-sub">Chưa có điểm tấn công nào được ghi nhận.</div>';
 
     const errorContent = errorTop && errorTop.totalErrors > 0
         ? `
             <div class="award-winner-name">${escapeHtml(errorTop.name)}</div>
             <div class="award-meta">
-                ${renderTeamMetaHtml(errorTop.team, `${errorTop.team.name} (${errorTop.pairLabel || '-'})`)}
+                ${renderTeamMetaHtml(errorTop.team, errorTop.team.name)}
             </div>
             <div class="award-stat-row tabular">
-                <strong>${errorTop.totalErrors} lần Out/Lưới</strong>
+                <strong>${errorTop.totalErrors} điểm phòng thủ</strong>
                 <span>${errorTop.matchesPlayed} trận · TB ${errorTop.avgErrors}/trận</span>
             </div>
         `
-        : '<div class="section-sub">Chưa có thống kê đánh Out / rúc lưới.</div>';
+        : '<div class="section-sub">Chưa có điểm phòng thủ nào được ghi nhận.</div>';
 
     const headHtml = includeHeader
         ? `
@@ -638,34 +681,56 @@ function renderAwardsCardsHtml(pairTop, scorerTop, errorTop, includeHeader = fal
         <div class="awards-cards-grid">
             <article class="award-card award-pair">
                 <div class="award-kicker">Cặp Đôi Ăn Ý</div>
-                <div class="award-criteria">Thắng nhiều nhất &rarr; Hiệu số điểm</div>
+                <div class="award-criteria">Cặp phối hợp hiệu quả nhất · Trận thắng &rarr; Hiệu số điểm</div>
                 ${pairContent}
             </article>
             <article class="award-card award-scorer">
-                <div class="award-kicker">Cá Nhân Ghi Nhiều Điểm Nhất</div>
-                <div class="award-criteria">Tính tất cả điểm VĐV ghi (bất kể Team thắng/thua)</div>
+                <div class="award-kicker">Chiến Thần Tấn Công</div>
+                <div class="award-criteria">Người chơi ghi nhiều điểm nhất (không phân biệt thắng/thua)</div>
                 ${scorerContent}
             </article>
             <article class="award-card award-error">
-                <div class="award-kicker">Thống Kê Đánh Out / Lưới</div>
-                <div class="award-criteria">Tổng bóng đánh Out &amp; không qua lưới</div>
+                <div class="award-kicker">Bậc Thầy Phòng Thủ</div>
+                <div class="award-criteria">Người chơi phòng thủ thành công nhiều nhất</div>
                 ${errorContent}
             </article>
         </div>
     `;
 }
 
-export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed = null) {
+export function renderAwardsVisibilityBar(state, isAdmin = false) {
+    if (!isAdmin) return '';
+    const config = normalizeConfig(state?.tournament?.config);
+    const awardsMode = config.awardsVisibility || 'public';
+    const topLimit = config.awardsTopLimit ?? 5;
+    return `
+        <div class="admin-awards-bar">
+            <div class="admin-awards-actions">
+                <button type="button" class="mode-pill-btn ${awardsMode === 'public' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="public">👁 Công khai</button>
+                <button type="button" class="mode-pill-btn ${awardsMode === 'anonymous' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="anonymous">🕶 Ẩn danh</button>
+            </div>
+            <div class="admin-awards-actions">
+                <button type="button" class="mode-pill-btn ${topLimit === 3 ? 'active' : ''}" data-action="set-awards-top-limit" data-limit="3">Top 3</button>
+                <button type="button" class="mode-pill-btn ${topLimit === 5 ? 'active' : ''}" data-action="set-awards-top-limit" data-limit="5">Top 5</button>
+                <button type="button" class="mode-pill-btn ${topLimit === 10 ? 'active' : ''}" data-action="set-awards-top-limit" data-limit="10">Top 10</button>
+                <button type="button" class="mode-pill-btn ${topLimit === 0 ? 'active' : ''}" data-action="set-awards-top-limit" data-limit="0">Tất cả</button>
+            </div>
+        </div>
+    `;
+}
+
+export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed = null, options = {}) {
     const config = normalizeConfig(state.tournament?.config);
     const awardsMode = config.awardsVisibility || 'public';
+    const includeVisibilityBar = options.includeVisibilityBar !== false;
 
     if (!isAdmin && awardsMode === 'hidden') {
         return `
             <section class="section-block">
                 <div class="card anon-locked-card">
                     <div class="anon-locked-icon">🔒</div>
-                    <h2 class="section-title" style="margin:0 0 8px;">Bảng Vinh Danh &amp; Point Cá Nhân đang tạm ẩn</h2>
-                    <p class="section-sub" style="margin:0;">Ban tổ chức đang tạm thời ẩn danh sách cặp đôi và điểm cá nhân. Bạn vẫn có thể theo dõi Bảng Xếp Hạng Đội, Lịch &amp; Kết Quả và Đội Hình bình thường.</p>
+                    <h2 class="section-title" style="margin:0 0 8px;">Thống Kê Cặp Đôi &amp; Cá Nhân đang tạm ẩn</h2>
+                    <p class="section-sub" style="margin:0;">Ban tổ chức đang tạm thời ẩn danh sách cặp đôi và điểm cá nhân. Bạn vẫn có thể theo dõi Bảng Xếp Hạng Đội, Lịch Thi Đấu và Đội Hình bình thường.</p>
                 </div>
             </section>
         `;
@@ -705,24 +770,24 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
         return true;
     };
 
-    const filteredPairs = isAnonView ? pairRowsAll : pairRowsAll.filter(filterPair);
-    const filteredPoints = isAnonView ? playerBoard.byPoints : playerBoard.byPoints.filter(filterPlayer);
-    const filteredErrors = isAnonView ? playerBoard.byErrors : playerBoard.byErrors.filter(filterPlayer);
+    const topLimit = config.awardsTopLimit ?? 5;
+    const applyTopLimit = (arr) => (topLimit > 0 ? arr.slice(0, topLimit) : arr);
+    const filteredPairs = applyTopLimit(isAnonView ? pairRowsAll : pairRowsAll.filter(filterPair));
+    const filteredPoints = applyTopLimit(isAnonView ? playerBoard.byPoints : playerBoard.byPoints.filter(filterPlayer));
+    const filteredErrors = applyTopLimit(isAnonView ? playerBoard.byErrors : playerBoard.byErrors.filter(filterPlayer));
     const teamColClassAttr = isAnonView ? '' : ' class="col-left"';
 
     const pairTableRows = filteredPairs.map((r) => {
         const diffCls = r.pointDiff > 0 ? 'diff-pos' : (r.pointDiff < 0 ? 'diff-neg' : 'diff-zero');
-        const winnerBadge = r.rank === 1 && r.played > 0 ? '<span class="award-inline-badge">Cặp đôi ăn ý #1</span>' : '';
         return `
             <tr>
                 <td><span class="rank-pill ${r.rank <= 3 ? `rank-${r.rank}` : ''}">${r.rank}</span></td>
                 <td class="col-left">
-                    <div class="table-pair-cell"><strong>${escapeHtml(r.playersText)}</strong>${winnerBadge}</div>
+                    <div class="table-pair-cell"><strong>${escapeHtml(r.playersText)}</strong></div>
                 </td>
                 <td${teamColClassAttr}>
-                    ${renderTeamMetaHtml(r.team, `${r.team.name} · ${r.levelName}`, true)}
+                    ${renderTeamMetaHtml(r.team, r.team.name, true)}
                 </td>
-                <td class="tabular">${r.played}</td>
                 <td class="tabular"><strong>${r.wins}W</strong> - ${r.losses}L</td>
                 <td class="tabular">${r.setsWon} - ${r.setsLost}</td>
                 <td class="tabular">${r.pointsFor} : ${r.pointsAgainst}</td>
@@ -735,8 +800,8 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
         if (!logs || logs.length === 0) return '<span class="section-sub">Chưa thi đấu</span>';
         return logs.map((log) => {
             const val = log[metricKey];
-            const cls = metricKey === 'points' ? 'pts' : 'errs';
-            const prefix = metricKey === 'points' ? `+${val}đ` : `${val} lỗi`;
+            const cls = metricKey === 'points' ? 'pts' : 'defs';
+            const prefix = metricKey === 'points' ? `+${val} công` : `+${val} thủ`;
             const titleText = log.scoreSummary ? `${log.roundName} (${log.scoreSummary})` : log.roundName;
             const labelText = log.opponentLabel ? `${log.roundName} vs ${log.opponentLabel}:` : `${log.roundName}:`;
             return `
@@ -749,16 +814,15 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
     };
 
     const pointsRows = filteredPoints.map((p) => {
-        const badge = p.rank === 1 && p.totalPoints > 0 ? '<span class="award-inline-badge pts">Top Scorer</span>' : '';
         const detailCol = isAnonView
             ? ''
             : `<td class="col-left match-log-cell"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'points')}</div></td>`;
         return `
             <tr>
                 <td><span class="rank-pill ${p.rank <= 3 ? `rank-${p.rank}` : ''}">${p.rank}</span></td>
-                <td class="col-left"><div class="table-pair-cell"><strong>${escapeHtml(p.name)}</strong>${badge}</div></td>
+                <td class="col-left"><div class="table-pair-cell"><strong>${escapeHtml(p.name)}</strong></div></td>
                 <td${teamColClassAttr}>
-                    ${renderTeamMetaHtml(p.team, `${p.team.code} · ${p.pairLabel || '-'}`, true)}
+                    ${renderTeamMetaHtml(p.team, p.team.name, true)}
                 </td>
                 <td class="tabular">${p.matchesPlayed}</td>
                 <td class="tabular"><span class="stat-highlight">${p.totalPoints}</span></td>
@@ -769,19 +833,18 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
     }).join('');
 
     const errorsRows = filteredErrors.map((p) => {
-        const badge = p.rank === 1 && p.totalErrors > 0 ? '<span class="award-inline-badge errs">Nhiều Out nhất</span>' : '';
         const detailCol = isAnonView
             ? ''
             : `<td class="col-left match-log-cell"><div class="match-log-list">${buildMatchChipsHtml(p.matchLogs, 'errors')}</div></td>`;
         return `
             <tr>
                 <td><span class="rank-pill ${p.rank === 1 ? 'rank-err' : ''}">${p.rank}</span></td>
-                <td class="col-left"><div class="table-pair-cell"><strong>${escapeHtml(p.name)}</strong>${badge}</div></td>
+                <td class="col-left"><div class="table-pair-cell"><strong>${escapeHtml(p.name)}</strong></div></td>
                 <td${teamColClassAttr}>
-                    ${renderTeamMetaHtml(p.team, `${p.team.code} · ${p.pairLabel || '-'}`, true)}
+                    ${renderTeamMetaHtml(p.team, p.team.name, true)}
                 </td>
                 <td class="tabular">${p.matchesPlayed}</td>
-                <td class="tabular"><strong style="color:var(--crimson);font-size:16px;">${p.totalErrors}</strong></td>
+                <td class="tabular"><strong style="color:#1D4ED8;font-size:16px;">${p.totalErrors}</strong></td>
                 <td class="tabular">${p.avgErrors}</td>
                 ${detailCol}
             </tr>
@@ -793,24 +856,8 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
         .join('');
     const searchIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
 
-    const adminControlsBar = isAdmin
-        ? `
-            <div class="admin-awards-bar">
-                <div class="admin-awards-status">
-                    <strong>Chế độ hiển thị công khai (Người xem):</strong>
-                    <span>${awardsMode === 'public'
-            ? '👁 Đang công khai tên thật.'
-            : (awardsMode === 'anonymous'
-                ? '🕶 Đang ẩn danh bằng mã 3 số (tự random mới mỗi lần người xem mở trang; Admin vẫn thấy tên thật).'
-                : '🔒 Đang ẩn hoàn toàn khỏi người xem (chỉ Admin xem được trang này).')}</span>
-                </div>
-                <div class="admin-awards-actions">
-                    <button type="button" class="mode-pill-btn ${awardsMode === 'public' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="public">👁 Công khai</button>
-                    <button type="button" class="mode-pill-btn ${awardsMode === 'anonymous' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="anonymous">🕶 Ẩn danh tên</button>
-                    <button type="button" class="mode-pill-btn ${awardsMode === 'hidden' ? 'active' : ''}" data-action="set-awards-visibility" data-visibility="hidden">🔒 Ẩn hoàn toàn</button>
-                </div>
-            </div>
-        `
+    const adminControlsBar = (isAdmin && includeVisibilityBar)
+        ? renderAwardsVisibilityBar(state, isAdmin)
         : '';
 
     const filterOrNoticeBar = isAnonView
@@ -819,7 +866,7 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
             <div class="filter-bar" style="margin-top:22px;">
                 <div class="search-input-wrap">
                     ${searchIcon}
-                    <input id="awards-search-input" type="search" class="search-input" data-action="awards-filter-query" value="${escapeHtml(filters.query || '')}" placeholder="Tìm tên VĐV, cặp đấu, đội...">
+                    <input id="awards-search-input" type="search" class="search-input" data-action="awards-filter-query" value="${escapeHtml(filters.query || '')}" placeholder="Tìm tên người chơi, cặp đấu, đội...">
                 </div>
                 <select class="select-clean" data-action="awards-filter-team" aria-label="Lọc theo đội">
                     <option value="all">Mọi đội</option>
@@ -836,8 +883,8 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
         <section class="section-block">
             <div class="section-header">
                 <div>
-                    <h2 class="section-title">Bảng Vinh Danh &amp; Point Cá Nhân</h2>
-                    <span class="section-sub">Tổng hợp tất cả các trận trong giải (vòng tròn + playoff) · Vinh danh thành tích cuối giải</span>
+                    <h2 class="section-title">Bảng Xếp Hạng Cặp Đôi &amp; Cá Nhân</h2>
+                    <span class="section-sub">Tổng hợp toàn giải (vòng tròn &amp; playoff) · Vinh danh Cặp Đôi Ăn Ý, Chiến Thần Tấn Công &amp; Bậc Thầy Phòng Thủ</span>
                 </div>
             </div>
 
@@ -848,8 +895,8 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
             ${filterOrNoticeBar}
 
             <div class="section-header" style="margin-top:18px;">
-                <h3 class="section-title" style="font-size:19px;">1. BXH Cặp Đôi Ăn Ý</h3>
-                <span class="section-sub">Xếp hạng: Trận cặp thắng &rarr; Hiệu số điểm &rarr; Hiệu số Set</span>
+                <h3 class="section-title" style="font-size:19px;">1. Cặp Đôi Ăn Ý</h3>
+                <span class="section-sub">Xếp hạng cặp đôi xuất sắc nhất giải: Trận thắng &rarr; Hiệu số điểm &rarr; Hiệu số Set</span>
             </div>
             <div class="card">
                 <div class="table-wrap">
@@ -858,8 +905,7 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
                             <tr>
                                 <th style="width:54px;">#</th>
                                 <th class="col-left">Cặp Đôi</th>
-                                <th${teamColClassAttr}>Đội &amp; Level</th>
-                                <th>Đã đấu</th>
+                                <th${teamColClassAttr}>Đội</th>
                                 <th>Thắng - Thua</th>
                                 <th>Set</th>
                                 <th>Điểm (Ghi:Thua)</th>
@@ -867,15 +913,15 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
                             </tr>
                         </thead>
                         <tbody>
-                            ${pairTableRows || '<tr><td colspan="8" style="padding:24px;color:var(--muted);">Chưa có dữ liệu cặp đấu.</td></tr>'}
+                            ${pairTableRows || '<tr><td colspan="7" style="padding:24px;color:var(--muted);">Chưa có dữ liệu cặp đấu.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
             </div>
 
             <div class="section-header" style="margin-top:28px;">
-                <h3 class="section-title" style="font-size:19px;">2. Bảng Point Cá Nhân</h3>
-                <span class="section-sub">Tính mọi điểm VĐV ghi trực tiếp, bất kể đội thắng hay thua</span>
+                <h3 class="section-title" style="font-size:19px;">2. Chiến Thần Tấn Công</h3>
+                <span class="section-sub">Vinh danh người chơi ghi nhiều điểm nhất toàn giải, bất kể đội thắng hay thua</span>
             </div>
             <div class="card">
                 <div class="table-wrap">
@@ -883,8 +929,8 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
                         <thead>
                             <tr>
                                 <th style="width:54px;">#</th>
-                                <th class="col-left">VĐV</th>
-                                <th${teamColClassAttr}>Đội · Cặp</th>
+                                <th class="col-left">Người chơi</th>
+                                <th${teamColClassAttr}>Đội</th>
                                 <th>Trận</th>
                                 <th>Tổng Điểm</th>
                                 <th>TB/Trận</th>
@@ -892,15 +938,15 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
                             </tr>
                         </thead>
                         <tbody>
-                            ${pointsRows || `<tr><td colspan="${playerTableColspan}" style="padding:24px;color:var(--muted);">Chưa có điểm cá nhân nào được ghi nhận.</td></tr>`}
+                            ${pointsRows || `<tr><td colspan="${playerTableColspan}" style="padding:24px;color:var(--muted);">Chưa có điểm tấn công nào được ghi nhận.</td></tr>`}
                         </tbody>
                     </table>
                 </div>
             </div>
 
             <div class="section-header" style="margin-top:28px;">
-                <h3 class="section-title" style="font-size:19px;">3. Thống Kê Đánh Out &amp; Không Qua Lưới</h3>
-                <span class="section-sub">Tổng hợp số lỗi tự đánh hỏng (Out + Lưới) qua từng trận</span>
+                <h3 class="section-title" style="font-size:19px;">3. Bậc Thầy Phòng Thủ</h3>
+                <span class="section-sub">Ghi nhận tổng số pha phòng thủ thành công qua từng trận</span>
             </div>
             <div class="card">
                 <div class="table-wrap">
@@ -908,16 +954,16 @@ export function renderAwardsTab(state, filters = {}, isAdmin = false, maskSeed =
                         <thead>
                             <tr>
                                 <th style="width:54px;">#</th>
-                                <th class="col-left">VĐV</th>
-                                <th${teamColClassAttr}>Đội · Cặp</th>
+                                <th class="col-left">Người chơi</th>
+                                <th${teamColClassAttr}>Đội</th>
                                 <th>Trận</th>
-                                <th>Tổng Out/Lưới</th>
+                                <th>Phòng Thủ</th>
                                 <th>TB/Trận</th>
                                 ${detailHeadErrors}
                             </tr>
                         </thead>
                         <tbody>
-                            ${errorsRows || `<tr><td colspan="${playerTableColspan}" style="padding:24px;color:var(--muted);">Chưa có thống kê đánh Out / Lưới.</td></tr>`}
+                            ${errorsRows || `<tr><td colspan="${playerTableColspan}" style="padding:24px;color:var(--muted);">Chưa có điểm phòng thủ nào được ghi nhận.</td></tr>`}
                         </tbody>
                     </table>
                 </div>
@@ -1042,7 +1088,7 @@ export function renderMatchesTab(state, filters, isAdmin) {
     return `
         <section class="section-block">
             <div class="section-header">
-                <h2 class="section-title">Lịch &amp; Kết Quả</h2>
+                <h2 class="section-title">Lịch Thi Đấu</h2>
             </div>
 
             <div class="filter-bar">
@@ -1053,13 +1099,13 @@ export function renderMatchesTab(state, filters, isAdmin) {
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <div class="search-input-wrap">
                         ${searchIcon}
-                        <input id="matches-search-input" type="search" class="search-input" data-action="filter-query" value="${escapeHtml(filters.query || '')}" placeholder="Tìm tên VĐV, cặp, đội...">
+                        <input id="matches-search-input" type="search" class="search-input" data-action="filter-query" value="${escapeHtml(filters.query || '')}" placeholder="Tìm tên người chơi, cặp, đội...">
                     </div>
 
                     <div class="pill-group" role="group" aria-label="Lọc theo trạng thái">
                         <button type="button" class="filter-pill ${filters.status === 'all' ? 'active' : ''}" data-action="filter-status" data-value="all">Tất cả</button>
-                        <button type="button" class="filter-pill ${filters.status === 'live' ? 'active' : ''}" data-action="filter-status" data-value="live">Live</button>
-                        <button type="button" class="filter-pill ${filters.status === 'completed' ? 'active' : ''}" data-action="filter-status" data-value="completed">Đã xong</button>
+                        <button type="button" class="filter-pill ${filters.status === 'live' ? 'active' : ''}" data-action="filter-status" data-value="live">Trực tiếp</button>
+                        <button type="button" class="filter-pill ${filters.status === 'completed' ? 'active' : ''}" data-action="filter-status" data-value="completed">Hoàn thành</button>
                         <button type="button" class="filter-pill ${filters.status === 'upcoming' ? 'active' : ''}" data-action="filter-status" data-value="upcoming">Sắp đấu</button>
                     </div>
 
@@ -1071,7 +1117,11 @@ export function renderMatchesTab(state, filters, isAdmin) {
             </div>
 
             ${filtered.length > 0
-            ? `<div class="matches-stack">${filtered.map((tm) => renderTeamMatchCard(tm, context, isAdmin, { liveOnly: filters.status === 'live' })).join('')}</div>`
+            ? `<div class="matches-stack">${filtered.map((tm) => renderTeamMatchCard(tm, context, isAdmin, {
+                liveOnly: filters.status === 'live',
+                compactSummary: filters.status !== 'live',
+                searchQuery: filters.query || ''
+            })).join('')}</div>`
             : `<div class="card card-pad" style="text-align:center;color:var(--muted);">Không có trận đấu nào khớp tìm kiếm hoặc bộ lọc hiện tại.</div>`
         }
         </section>
@@ -1106,7 +1156,7 @@ export function renderTeamsTab(state, query = '') {
         const pairsHtml = teamPairs.map((pair) => {
             const pStat = pairStats.get(pair.id) || { wins: 0, losses: 0, pointDiff: 0 };
             const levelLabel = config.levelNames[pair.level_index - 1] || `Level ${pair.level_index}`;
-            const players = `${pair.player_1 || ''}${pair.player_2 ? ` & ${pair.player_2}` : ''}`.trim() || 'Chưa cập nhật VĐV';
+            const players = `${pair.player_1 || ''}${pair.player_2 ? ` - ${pair.player_2}` : ''}`.trim() || 'Chưa cập nhật người chơi';
 
             return `
                 <div class="lineup-item">
@@ -1144,16 +1194,16 @@ export function renderTeamsTab(state, query = '') {
         <section class="section-block">
             <div class="section-header">
                 <div>
-                    <h2 class="section-title">Đội Hình Cố Định (Fixed Lineup)</h2>
+                    <h2 class="section-title">Đội Hình Cố Định</h2>
                     <div class="section-sub">${(state.teams || []).length} đội · ${config.levelsCount} cặp cố định/đội</div>
                 </div>
                 <div class="search-input-wrap">
                     ${searchIcon}
-                    <input id="teams-search-input" type="search" class="search-input" data-action="filter-query" value="${escapeHtml(query)}" placeholder="Tìm VĐV hoặc tên đội...">
+                    <input id="teams-search-input" type="search" class="search-input" data-action="filter-query" value="${escapeHtml(query)}" placeholder="Tìm người chơi hoặc tên đội...">
                 </div>
             </div>
             <div class="teams-grid">
-                ${cardsHtml || '<div class="card card-pad">Không tìm thấy đội hoặc VĐV phù hợp.</div>'}
+                ${cardsHtml || '<div class="card card-pad">Không tìm thấy đội hoặc người chơi phù hợp.</div>'}
             </div>
         </section>
     `;
@@ -1205,7 +1255,7 @@ export function renderRulesTab(state) {
                     <ul>
                         <li>Toàn giải có <strong>${teamCount} đội</strong> (${escapeHtml(teams.map((t) => t.code).join(', '))}).</li>
                         <li>Mỗi đội gồm <strong>${config.levelsCount} cặp cố định</strong>: ${escapeHtml(config.levelNames.join(', '))}.</li>
-                        <li><strong>Fixed Lineup:</strong> cặp VĐV giữ nguyên từ đầu đến cuối giải, không đổi người giữa các vòng.</li>
+                        <li><strong>Fixed Lineup:</strong> cặp người chơi giữ nguyên từ đầu đến cuối giải, không đổi người giữa các vòng.</li>
                     </ul>
                 </article>
 
@@ -1282,6 +1332,46 @@ export function renderTvModeView(state) {
     `;
 }
 
+export function renderTeamMatchDetailModal(matchId, state, isAdmin = false) {
+    const config = normalizeConfig(state?.tournament?.config);
+    const tm = (state?.teamMatches || []).find((m) => m.id === matchId);
+    if (!tm) return '';
+
+    const teamsMap = new Map((state?.teams || []).map((t) => [t.id, t]));
+    const pairsMap = new Map((state?.teamPairs || []).map((p) => [p.id, p]));
+    const context = { teamsMap, pairsMap, subMatches: state?.subMatches || [], config };
+    const teamA = teamsMap.get(tm.team_a_id);
+    const teamB = teamsMap.get(tm.team_b_id);
+    if (!teamA || !teamB) return '';
+
+    const evalTm = evaluateTeamMatch(tm, state?.subMatches || [], config);
+    const matchCourts = getTeamMatchCourts(evalTm.subMatches, tm);
+    const metaText = [
+        tm.round_name,
+        matchCourts.join(' · '),
+        formatScheduleRaw(tm.scheduled_time)
+    ].filter(Boolean).join(' · ');
+
+    const fullCardHtml = renderTeamMatchCard(tm, context, isAdmin, { compactSummary: false });
+
+    return `
+        <div class="modal-backdrop" data-action="close-modal">
+            <div class="modal-card wide match-detail-modal-card">
+                <div class="modal-header match-detail-modal-header">
+                    <div style="min-width:0;">
+                        <h3 class="modal-title">${escapeHtml(teamA.name)} vs ${escapeHtml(teamB.name)}</h3>
+                        <div class="section-sub">${escapeHtml(metaText)}</div>
+                    </div>
+                    <button type="button" class="modal-close" data-action="close-modal" aria-label="Đóng">✕</button>
+                </div>
+                <div class="modal-body match-detail-modal-body">
+                    ${fullCardHtml}
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 export function renderTeamDetailModal(teamId, state) {
     const config = normalizeConfig(state.tournament?.config);
     const team = (state.teams || []).find((t) => t.id === teamId);
@@ -1303,7 +1393,7 @@ export function renderTeamDetailModal(teamId, state) {
     const pairsHtml = pairs.map((p) => {
         const st = pairStats.get(p.id) || { wins: 0, losses: 0, pointDiff: 0 };
         const lvl = config.levelNames[p.level_index - 1] || `Level ${p.level_index}`;
-        const players = `${p.player_1 || ''}${p.player_2 ? ` & ${p.player_2}` : ''}`.trim();
+        const players = `${p.player_1 || ''}${p.player_2 ? ` - ${p.player_2}` : ''}`.trim();
         return `
             <div class="lineup-item">
                 <div>
@@ -1467,10 +1557,10 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
     const colorB = teamB?.color || '#E05328';
 
     const playerNameBySlot = new Map([
-        ['a1', pairA?.player_1 || `${pairACode} · VĐV 1`],
-        ['a2', pairA?.player_2 || `${pairACode} · VĐV 2`],
-        ['b1', pairB?.player_1 || `${pairBCode} · VĐV 1`],
-        ['b2', pairB?.player_2 || `${pairBCode} · VĐV 2`]
+        ['a1', pairA?.player_1 || `${pairACode} · Người chơi 1`],
+        ['a2', pairA?.player_2 || `${pairACode} · Người chơi 2`],
+        ['b1', pairB?.player_1 || `${pairBCode} · Người chơi 1`],
+        ['b2', pairB?.player_2 || `${pairBCode} · Người chơi 2`]
     ]);
 
     const setTabsHtml = sets.map((s, idx) => {
@@ -1501,8 +1591,8 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
                     <span class="history-pair-tag">${escapeHtml(m.pair)}</span>
                 </div>
                 <div class="history-box-metrics tabular">
-                    <span class="history-metric pts">+${st.points} điểm</span>
-                    <span class="history-metric err">${st.errors} lỗi</span>
+                    <span class="history-metric pts">+${st.points} công</span>
+                    <span class="history-metric def">+${st.errors} thủ</span>
                 </div>
             </div>
         `;
@@ -1522,33 +1612,45 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
     const rallyRowsHtml = orderedLogs.map((e) => {
         const sName = playerNameBySlot.get(e.sSlot) || e.sSlot;
         const rName = playerNameBySlot.get(e.rSlot) || e.rSlot;
+        const aName = e.aSlot ? (playerNameBySlot.get(e.aSlot) || e.aSlot) : sName;
         const sPair = e.sSide === 'a' ? pairACode : pairBCode;
         const sColor = e.sSide === 'a' ? colorA : colorB;
         const sCourt = e.sPos === 1 ? 'Phải' : 'Trái';
         const rCourt = e.rPos === 1 ? 'Phải' : 'Trái';
         const clock = formatRallyClock(e.ts);
 
+        const shiftTag = e.sideOut
+            ? '<span class="history-shift-pill is-sideout">⇄ Đổi giao</span>'
+            : `<span class="history-shift-pill">→ Phát ${e.nextTurn}</span>`;
+
         let badgeCls = 'is-point';
-        let badgeTxt = '+1 Điểm';
-        let actionDesc = `${sName} tấn công chính xác`;
+        let badgeTxt = '+1 Tấn công';
+        let actionDesc = `${aName} tấn công chính xác`;
         let shiftHtml = '';
 
-        if (e.outcome === 'receiver-error') {
+        if (e.outcome === 'server-ace') {
+            badgeTxt = 'Ace +1';
+            actionDesc = `${sName} phát ăn điểm trực tiếp (+1 công)`;
+        } else if (e.outcome === 'server-attack' || e.outcome === 'partner-attack') {
+            badgeTxt = '+1 Tấn công';
+            actionDesc = `${aName} tấn công chính xác (+1 công)`;
+        } else if (e.outcome === 'recv1-defense' || e.outcome === 'recv2-defense' || e.outcome === 'receiver-win') {
+            badgeCls = 'is-recv';
+            badgeTxt = '+1 Phòng thủ';
+            actionDesc = `${e.aSlot ? aName : rName} phòng thủ thành công (+1 thủ)`;
+            shiftHtml = shiftTag;
+        } else if (e.outcome === 'serve-fault') {
+            badgeCls = 'is-fault';
+            badgeTxt = 'Đổi lượt';
+            actionDesc = `${sName} phát hỏng / tấn công lỗi`;
+            shiftHtml = shiftTag;
+        } else if (e.outcome === 'receiver-error') {
             actionDesc = `${rName} đỡ hỏng`;
         } else if (e.outcome === 'server-out') {
             badgeCls = 'is-fault';
             badgeTxt = 'Mất lượt';
             actionDesc = `${sName} phát hỏng / Out`;
-            shiftHtml = e.sideOut
-                ? '<span class="history-shift-pill is-sideout">⇄ Đổi giao</span>'
-                : `<span class="history-shift-pill">→ Phát ${e.nextTurn}</span>`;
-        } else if (e.outcome === 'receiver-win') {
-            badgeCls = 'is-recv';
-            badgeTxt = 'Đoạt giao';
-            actionDesc = `${rName} phòng thủ (+1đ CN)`;
-            shiftHtml = e.sideOut
-                ? '<span class="history-shift-pill is-sideout">⇄ Đổi giao</span>'
-                : `<span class="history-shift-pill">→ Phát ${e.nextTurn}</span>`;
+            shiftHtml = shiftTag;
         }
 
         const scoreACls = e.scored && e.sSide === 'a' ? 'is-scored' : '';
@@ -1593,11 +1695,16 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
 
     const subHeaderMeta = [tm?.round_name, levelName, tm?.court].filter(Boolean).join(' · ');
 
+    const backToMatchBtn = options.returnToMatchId
+        ? `<button type="button" class="history-back-btn" data-action="view-match-detail" data-match-id="${escapeHtml(options.returnToMatchId)}">&larr; Quay lại trận đấu</button>`
+        : '';
+
     return `
         <div class="modal-backdrop" data-action="close-modal">
             <div class="modal-card wide history-modal-card">
                 <div class="modal-header history-modal-header">
                     <div style="min-width:0;">
+                        ${backToMatchBtn}
                         <h3 class="modal-title">Chi Tiết Diễn Biến Từng Lượt</h3>
                         <div class="section-sub">${escapeHtml(subHeaderMeta)}</div>
                     </div>
@@ -1674,7 +1781,14 @@ export function renderRegisterPage(tournament, options = {}) {
         submitting = false
     } = options;
 
+    const backRowHtml = `
+        <div class="reg-back-row">
+            <a href="./" class="reg-back-link">&larr; Về trang giải đấu</a>
+        </div>
+    `;
+
     const headerCardHtml = `
+        ${backRowHtml}
         <div class="reg-card reg-header-card">
             <div class="reg-banner-strip"></div>
             <div class="reg-header-body">

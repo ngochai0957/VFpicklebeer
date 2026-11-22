@@ -32,13 +32,16 @@ import {
 } from './ui-admin.js';
 import {
     renderAwardsTab,
+    renderAwardsVisibilityBar,
     renderLiveSpotlight,
     renderMatchesTab,
+    renderPlayoffSection,
     renderRegisterPage,
     renderRulesTab,
     renderStandingsTab,
     renderSubMatchHistoryModal,
     renderTeamDetailModal,
+    renderTeamMatchDetailModal,
     renderTeamsTab,
     renderTvModeView
 } from './ui-public.js';
@@ -54,11 +57,51 @@ function generateSessionMaskSeed() {
     return Math.floor(Math.random() * 999983) + 1;
 }
 
+const VALID_TABS = new Set(['standings', 'matches', 'teams', 'awards', 'rules', 'admin']);
+const VALID_ADMIN_SUBTABS = new Set(['scores', 'teams', 'schedule', 'registrations', 'settings']);
+
+function isRegisterPageMode() {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return ['1', 'true', 'yes'].includes((params.get('register') || '').toLowerCase())
+        || params.get('page') === 'register'
+        || window.location.hash === '#register';
+}
+
+function parseTabFromHash() {
+    if (typeof window === 'undefined' || isRegisterPageMode()) {
+        return { tab: 'standings', adminSubtab: 'scores' };
+    }
+    const raw = String(window.location.hash || '').replace(/^#\/?/, '').trim().toLowerCase();
+    if (!raw) return { tab: 'standings', adminSubtab: 'scores' };
+    const [tabPart, subPart] = raw.split('/');
+    const tab = VALID_TABS.has(tabPart) ? tabPart : 'standings';
+    const adminSubtab = VALID_ADMIN_SUBTABS.has(subPart) ? subPart : 'scores';
+    return { tab, adminSubtab };
+}
+
+function syncUrlHashWithTab(replace = false) {
+    if (typeof window === 'undefined' || isRegisterPageMode()) return;
+    const nextHash = appState.activeTab === 'admin'
+        ? `#admin/${appState.adminState.subtab || 'scores'}`
+        : `#${appState.activeTab || 'standings'}`;
+    if (window.location.hash === nextHash) return;
+    if (replace && typeof window.history?.replaceState === 'function') {
+        window.history.replaceState(null, '', nextHash);
+    } else if (typeof window.history?.pushState === 'function') {
+        window.history.pushState(null, '', nextHash);
+    } else {
+        window.location.hash = nextHash;
+    }
+}
+
+const initialRoute = parseTabFromHash();
+
 const appState = {
     data: null,
     isAdmin: false,
     adminEmail: null,
-    activeTab: 'standings',
+    activeTab: initialRoute.tab,
     tvMode: false,
     sessionMaskSeed: generateSessionMaskSeed(),
     teamsQuery: '',
@@ -73,7 +116,7 @@ const appState = {
         query: ''
     },
     adminState: {
-        subtab: 'scores',
+        subtab: initialRoute.adminSubtab,
         selectedMatchId: null,
         rallyBySet: {},
         rallyUndoBySet: {},
@@ -95,6 +138,39 @@ const appState = {
 const pendingSubSaves = new Map();
 const activeSavePromises = new Map();
 let deferredRender = false;
+let confirmResolver = null;
+
+function resolveConfirmModal(accepted) {
+    const fn = confirmResolver;
+    confirmResolver = null;
+    if (appState.modal?.type === 'confirm') {
+        appState.modal = null;
+        renderModal();
+    }
+    if (typeof fn === 'function') fn(Boolean(accepted));
+}
+
+function showConfirmDialog({
+    title = 'Xác nhận thao tác',
+    message = '',
+    confirmLabel = 'Xác nhận',
+    cancelLabel = 'Hủy',
+    danger = true
+}) {
+    if (confirmResolver) resolveConfirmModal(false);
+    return new Promise((resolve) => {
+        confirmResolver = resolve;
+        appState.modal = {
+            type: 'confirm',
+            title,
+            message,
+            confirmLabel,
+            cancelLabel,
+            danger
+        };
+        renderModal();
+    });
+}
 
 function syncMobileHeaderHeight() {
     if (typeof document === 'undefined' || typeof window === 'undefined') return;
@@ -104,14 +180,6 @@ function syncMobileHeaderHeight() {
         document.documentElement.style.setProperty('--site-header-h', `${h}px`);
     }
     document.body.classList.remove('mobile-header-hidden');
-}
-
-function isRegisterPageMode() {
-    if (typeof window === 'undefined') return false;
-    const params = new URLSearchParams(window.location.search);
-    return ['1', 'true', 'yes'].includes((params.get('register') || '').toLowerCase())
-        || params.get('page') === 'register'
-        || window.location.hash === '#register';
 }
 
 async function loadAdminRegistrations({ rerenderAfter = true } = {}) {
@@ -217,7 +285,7 @@ function syncRosterPlayerSelects(changedSelect = null) {
         if (chosenKey) {
             const conflict = selects.some((sel) => sel !== changedSelect && String(sel.value || '').trim().toLowerCase() === chosenKey);
             if (conflict) {
-                showToast(`VĐV "${changedSelect.value}" đã được chọn ở vị trí khác!`, true);
+                showToast(`Người chơi "${changedSelect.value}" đã được chọn ở vị trí khác!`, true);
                 changedSelect.value = '';
             }
         }
@@ -245,10 +313,10 @@ function syncRosterPlayerSelects(changedSelect = null) {
         if (catalog.length > 0) {
             const assignedCount = catalog.filter((p) => chosenKeysAll.has(p.key)).length;
             const remaining = Math.max(0, catalog.length - assignedCount);
-            badge.textContent = `Chờ xếp: ${remaining}/${catalog.length} VĐV`;
+            badge.textContent = `Chờ xếp: ${remaining}/${catalog.length} người chơi`;
             badge.classList.toggle('is-done', remaining === 0);
         } else {
-            badge.textContent = 'Chưa có VĐV ĐK';
+            badge.textContent = 'Chưa có người chơi ĐK';
             badge.classList.remove('is-done');
         }
     }
@@ -355,13 +423,10 @@ function renderHeroAndNav() {
     if (navEl) {
         const tab = appState.activeTab;
         const awardsVisibility = config.awardsVisibility || 'public';
-        const showAwardsTab = appState.isAdmin || awardsVisibility !== 'hidden';
         const awardsAdminBadge = appState.isAdmin && awardsVisibility !== 'public'
             ? ` <span>${awardsVisibility === 'hidden' ? '🔒' : '🕶'}</span>`
             : '';
-        const awardsTabHtml = showAwardsTab
-            ? `<button type="button" class="nav-tab ${tab === 'awards' ? 'active' : ''}" data-action="switch-tab" data-tab="awards">Vinh Danh &amp; Point${awardsAdminBadge}</button>`
-            : '';
+        const awardsTabHtml = `<button type="button" class="nav-tab ${tab === 'awards' ? 'active' : ''}" data-action="switch-tab" data-tab="awards">Thống Kê${awardsAdminBadge}</button>`;
         const adminTabHtml = appState.isAdmin
             ? `<button type="button" class="nav-tab admin-tab ${tab === 'admin' ? 'active' : ''}" data-action="switch-tab" data-tab="admin">${ICONS.sliders} Quản trị</button>`
             : '';
@@ -378,10 +443,10 @@ function renderHeroAndNav() {
 
                 <nav class="nav-links" role="tablist" aria-label="Điều hướng">
                     <button type="button" class="nav-tab ${tab === 'standings' ? 'active' : ''}" data-action="switch-tab" data-tab="standings">
-                        Bảng Xếp Hạng
+                        Tổng Quan
                     </button>
                     <button type="button" class="nav-tab ${tab === 'matches' ? 'active' : ''}" data-action="switch-tab" data-tab="matches">
-                        Lịch &amp; Kết Quả
+                        Lịch Thi Đấu
                         ${liveMatchesCount > 0 ? `<span class="nav-count live">${liveMatchesCount}</span>` : `<span class="nav-count">${(state.teamMatches || []).length}</span>`}
                     </button>
                     <button type="button" class="nav-tab ${tab === 'teams' ? 'active' : ''}" data-action="switch-tab" data-tab="teams">
@@ -427,12 +492,12 @@ function renderHeroAndNav() {
 
         const teamsCount = (state.teams || []).length;
         const pairsCount = (state.teamPairs || []).length;
-        const top3 = calculateStandings(state.teams, state.teamMatches, state.subMatches, config).slice(0, 3);
+        const allStandings = calculateStandings(state.teams, state.teamMatches, state.subMatches, config);
 
-        const podiumRowsHtml = top3.map((row) => {
+        const podiumRowsHtml = allStandings.map((row) => {
             const diffStr = row.pointDiff > 0 ? `+${row.pointDiff}` : String(row.pointDiff);
             return `
-                <div class="pulse-podium-row">
+                <div class="pulse-podium-row is-clickable" role="button" tabindex="0" data-action="view-team" data-team-id="${escapeHtml(row.team.id)}">
                     <div class="pulse-podium-left">
                         <span class="pulse-rank-num ${row.rank === 1 ? 'top1' : ''}">#${row.rank}</span>
                         <span class="team-code-dot sm" style="background:${escapeHtml(row.team.color)}">${escapeHtml(row.team.code)}</span>
@@ -455,15 +520,15 @@ function renderHeroAndNav() {
                         <h1 class="hero-h1">${formatTwoToneTitle(state.tournament.name)}</h1>
                         <p class="hero-desc">${escapeHtml(state.tournament.subtitle)}</p>
                         <div class="hero-cta-row">
-                            <button type="button" class="button" data-action="switch-tab" data-tab="matches">Xem Lịch &amp; Tỉ Số</button>
-                            <button type="button" class="button secondary" data-action="switch-tab" data-tab="teams">Đội Hình Cố Định</button>
+                            <button type="button" class="button" data-action="switch-tab" data-tab="matches">Lịch thi đấu</button>
+                            <button type="button" class="button secondary" data-action="switch-tab" data-tab="teams">Đội hình</button>
                         </div>
                     </div>
 
                     <div class="hero-pulse-card">
                         <div class="pulse-card-head">
                             <span>Tổng quan giải đấu</span>
-                            <span class="pulse-card-sub">Fixed Lineup · Bo${config.bestOf} (${config.pointsPerSet}đ)</span>
+                            <button type="button" class="link-btn" data-action="switch-tab" data-tab="awards">Xem chi tiết &rarr;</button>
                         </div>
 
                         <div class="pulse-podium-list">
@@ -545,10 +610,12 @@ function renderMainContent() {
         : '';
 
     let tabHtml = '';
-    if (appState.activeTab === 'standings') tabHtml = renderStandingsTab(state, appState.isAdmin, appState.sessionMaskSeed);
+    if (appState.activeTab === 'standings') tabHtml = renderPlayoffSection(state, appState.isAdmin);
     else if (appState.activeTab === 'matches') tabHtml = renderMatchesTab(state, appState.filters, appState.isAdmin);
     else if (appState.activeTab === 'teams') tabHtml = renderTeamsTab(state, appState.teamsQuery);
-    else if (appState.activeTab === 'awards') tabHtml = renderAwardsTab(state, appState.awardsFilters, appState.isAdmin, appState.sessionMaskSeed);
+    else if (appState.activeTab === 'awards') {
+        tabHtml = `${renderAwardsVisibilityBar(state, appState.isAdmin)}${renderStandingsTab(state, appState.isAdmin, appState.sessionMaskSeed, { includePlayoff: false })}${renderAwardsTab(state, appState.awardsFilters, appState.isAdmin, appState.sessionMaskSeed, { includeVisibilityBar: false })}`;
+    }
     else if (appState.activeTab === 'rules') tabHtml = renderRulesTab(state);
 
     mainEl.innerHTML = `${liveBanner}${tabHtml}`;
@@ -575,6 +642,11 @@ function renderModal() {
         return;
     }
 
+    if (appState.modal.type === 'match-detail') {
+        modalRoot.innerHTML = renderTeamMatchDetailModal(appState.modal.matchId, appState.data, appState.isAdmin);
+        return;
+    }
+
     if (appState.modal.type === 'set-history') {
         modalRoot.innerHTML = renderSubMatchHistoryModal(appState.modal.subId, appState.data, appState.modal);
         return;
@@ -585,6 +657,26 @@ function renderModal() {
         modalRoot.innerHTML = renderEditRegistrationModal(reg);
         const nameInput = document.getElementById('edit-reg-fullname');
         if (nameInput) nameInput.focus();
+        return;
+    }
+
+    if (appState.modal.type === 'confirm') {
+        const m = appState.modal;
+        modalRoot.innerHTML = `
+            <div class="modal-backdrop" data-action="confirm-cancel">
+                <div class="modal-card confirm-modal-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+                    <div class="confirm-modal-body">
+                        <div class="confirm-modal-icon ${m.danger ? 'is-danger' : 'is-warn'}">${m.danger ? '!' : '?'}</div>
+                        <h3 id="confirm-modal-title" class="confirm-modal-title">${escapeHtml(m.title)}</h3>
+                        <p class="confirm-modal-msg">${escapeHtml(m.message)}</p>
+                        <div class="confirm-modal-actions">
+                            <button type="button" class="btn btn-secondary confirm-btn" data-action="confirm-cancel">${escapeHtml(m.cancelLabel)}</button>
+                            <button type="button" class="btn ${m.danger ? 'btn-danger-solid' : 'btn-primary'} confirm-btn" data-action="confirm-ok">${escapeHtml(m.confirmLabel)}</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
         return;
     }
 
@@ -617,6 +709,9 @@ function renderModal() {
 function renderAll() {
     if (!appState.isAdmin && appState.activeTab === 'admin') {
         appState.activeTab = 'standings';
+        syncUrlHashWithTab(true);
+    } else {
+        syncUrlHashWithTab(false);
     }
     renderModeBanner();
     renderHeroAndNav();
@@ -959,12 +1054,8 @@ async function handleAction(action, el, event) {
     if (action === 'switch-tab') {
         appState.tvMode = false;
         const nextTab = el.dataset.tab;
-        const cfg = normalizeConfig(appState.data?.tournament?.config);
         if (nextTab === 'admin' && !appState.isAdmin) {
             appState.modal = { type: 'login', error: '' };
-        } else if (nextTab === 'awards' && !appState.isAdmin && cfg.awardsVisibility === 'hidden') {
-            appState.activeTab = 'standings';
-            showToast('Bảng Vinh Danh & Point đang tạm ẩn bởi Ban tổ chức.');
         } else {
             appState.activeTab = nextTab;
             if (nextTab === 'admin' && appState.isAdmin && (appState.adminState.subtab === 'registrations' || appState.adminState.subtab === 'teams')) {
@@ -997,6 +1088,19 @@ async function handleAction(action, el, event) {
         return;
     }
 
+    if (action === 'confirm-ok') {
+        resolveConfirmModal(true);
+        return;
+    }
+
+    if (action === 'confirm-cancel') {
+        if (el.classList.contains('modal-backdrop') && event?.target !== el) {
+            return;
+        }
+        resolveConfirmModal(false);
+        return;
+    }
+
     if (action === 'close-modal') {
         if (el.classList.contains('modal-backdrop') && event?.target !== el) {
             return;
@@ -1008,6 +1112,12 @@ async function handleAction(action, el, event) {
 
     if (action === 'view-team') {
         appState.modal = { type: 'team', teamId: el.dataset.teamId };
+        renderModal();
+        return;
+    }
+
+    if (action === 'view-match-detail') {
+        appState.modal = { type: 'match-detail', matchId: el.dataset.matchId };
         renderModal();
         return;
     }
@@ -1039,6 +1149,7 @@ async function handleAction(action, el, event) {
     if (action === 'admin-subtab') {
         if (!appState.isAdmin) return;
         appState.adminState.subtab = el.dataset.subtab || 'scores';
+        syncUrlHashWithTab(false);
         if (appState.adminState.subtab === 'registrations' || appState.adminState.subtab === 'teams') {
             await loadAdminRegistrations({ rerenderAfter: false });
         }
@@ -1048,6 +1159,7 @@ async function handleAction(action, el, event) {
 
     if (action === 'admin-edit-match') {
         if (!appState.isAdmin) return;
+        appState.modal = null;
         appState.tvMode = false;
         appState.activeTab = 'admin';
         appState.adminState.subtab = 'scores';
@@ -1099,7 +1211,7 @@ async function handleAction(action, el, event) {
         if (!appState.isAdmin) return;
         try {
             if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(REGISTRATION_TABLE_SQL);
-            showToast('Đã sao chép đoạn SQL tạo bảng Đăng ký VĐV!');
+            showToast('Đã sao chép đoạn SQL tạo bảng Đăng ký người chơi!');
         } catch {
             showToast('Hãy bôi đen và copy đoạn SQL trực tiếp từ khung bên dưới.', true);
         }
@@ -1116,7 +1228,7 @@ async function handleAction(action, el, event) {
                 config: { ...curCfg, registrationOpen: nextOpen }
             });
             setSaveStatus('Đã lưu ✓');
-            showToast(nextOpen ? 'Đã MỞ Form nhận đơn đăng ký VĐV.' : 'Đã TẠM ĐÓNG Form đăng ký VĐV.');
+            showToast(nextOpen ? 'Đã MỞ Form nhận đơn đăng ký người chơi.' : 'Đã TẠM ĐÓNG Form đăng ký người chơi.');
             renderAll();
         } catch (err) {
             setSaveStatus('Lỗi!', true);
@@ -1135,7 +1247,7 @@ async function handleAction(action, el, event) {
     if (action === 'export-registrations-csv') {
         if (!appState.isAdmin) return;
         downloadRegistrationsCsv(appState.adminState.registrations || []);
-        showToast('Đã tải xuống file CSV danh sách VĐV.');
+        showToast('Đã tải xuống file CSV danh sách người chơi.');
         return;
     }
 
@@ -1169,7 +1281,12 @@ async function handleAction(action, el, event) {
     if (action === 'delete-registration') {
         if (!appState.isAdmin) return;
         const regId = el.dataset.regId;
-        if (!confirm('Xóa đơn đăng ký này khỏi danh sách?')) return;
+        const ok = await showConfirmDialog({
+            title: 'Xóa đơn đăng ký?',
+            message: 'Đơn đăng ký này sẽ bị xóa khỏi danh sách và không thể hoàn tác.',
+            confirmLabel: 'Xóa'
+        });
+        if (!ok) return;
         try {
             setSaveStatus('Đang xóa...');
             const res = await store.deleteRegistration(regId);
@@ -1278,12 +1395,16 @@ async function handleAction(action, el, event) {
     }
 
     if (action === 'view-set-history') {
+        const returnToMatchId = appState.modal?.type === 'match-detail'
+            ? appState.modal.matchId
+            : (appState.modal?.returnToMatchId || null);
         appState.modal = {
             type: 'set-history',
             subId: el.dataset.subId,
             setIdx: Math.max(0, Number(el.dataset.setIdx) || 0),
             filter: 'all',
-            sortDesc: false
+            sortDesc: false,
+            returnToMatchId
         };
         renderModal();
         return;
@@ -1369,7 +1490,7 @@ async function handleAction(action, el, event) {
             const duplicates = findDuplicateRosterPlayers(draftPairs);
             if (duplicates.length > 0) {
                 const d = duplicates[0];
-                showToast(`VĐV "${d.name}" bị chọn trùng ở ${d.slots.join(', ')}. Mỗi VĐV chỉ được xếp 1 vị trí.`, true);
+                showToast(`Người chơi "${d.name}" bị chọn trùng ở ${d.slots.join(', ')}. Mỗi người chơi chỉ được xếp 1 vị trí.`, true);
                 return;
             }
             setSaveStatus('Đang lưu đội hình...');
@@ -1413,10 +1534,49 @@ async function handleAction(action, el, event) {
         return;
     }
 
+    if (action === 'set-awards-top-limit') {
+        if (!appState.isAdmin || !appState.data) return;
+        const nextLimit = Number(el.dataset.limit);
+        if (![3, 5, 10, 0].includes(nextLimit)) return;
+        const currentCfg = normalizeConfig(appState.data.tournament?.config);
+        try {
+            setSaveStatus('Đang lưu...');
+            appState.data = await store.updateTournament({
+                config: {
+                    ...currentCfg,
+                    awardsTopLimit: nextLimit
+                }
+            });
+            setSaveStatus('Đã lưu ✓');
+            showToast(nextLimit === 0 ? 'Đã bật hiển thị tất cả người chơi & cặp đôi.' : `Đã chuyển hiển thị 3 giải phụ sang Top ${nextLimit}.`);
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi!', true);
+            showToast(err.message || 'Không thể cập nhật số lượng hiển thị.', true);
+        }
+        return;
+    }
+
+    if (action === 'toggle-sched-edit') {
+        const matchId = el.dataset.matchId;
+        const panel = document.querySelector(`[data-sched-edit-panel="${CSS.escape(matchId)}"]`);
+        if (panel) {
+            const isNowHidden = panel.classList.toggle('hidden');
+            el.setAttribute('aria-expanded', String(!isNowHidden));
+            el.classList.toggle('is-open', !isNowHidden);
+        }
+        return;
+    }
+
     if (action === 'delete-match') {
         if (!appState.isAdmin) return;
         const matchId = el.dataset.matchId;
-        if (!confirm('Bạn chắc chắn muốn xóa cuộc đối đầu (Team Match) này?')) return;
+        const ok = await showConfirmDialog({
+            title: 'Xóa trận đấu?',
+            message: 'Bạn chắc chắn muốn xóa trận đấu này cùng toàn bộ tỉ số các cặp bên trong?',
+            confirmLabel: 'Xóa trận'
+        });
+        if (!ok) return;
         try {
             appState.data = await store.deleteTeamMatch(matchId);
             showToast('Đã xóa trận đấu.');
@@ -1442,8 +1602,13 @@ async function handleAction(action, el, event) {
 
     if (action === 'reset-demo') {
         if (!appState.isAdmin) return;
-        if (!appState.data?.isUninitialized && !confirm('Khôi phục toàn bộ về dữ liệu mẫu 6 đội × 3 cặp? Dữ liệu hiện tại sẽ bị ghi đè.')) {
-            return;
+        if (!appState.data?.isUninitialized) {
+            const ok = await showConfirmDialog({
+                title: 'Khôi phục dữ liệu mẫu?',
+                message: 'Toàn bộ dữ liệu hiện tại sẽ bị ghi đè về giải mẫu 6 đội × 3 cặp.',
+                confirmLabel: 'Khôi phục'
+            });
+            if (!ok) return;
         }
         try {
             setSaveStatus('Đang khởi tạo...');
@@ -1667,11 +1832,11 @@ document.addEventListener('submit', async (event) => {
             }, 'approved');
             await loadAdminRegistrations({ rerenderAfter: false });
             setSaveStatus('Đã lưu ✓');
-            showToast('Đã thêm VĐV vào danh sách.');
+            showToast('Đã thêm người chơi vào danh sách.');
             renderAll();
         } catch (err) {
             setSaveStatus('Lỗi!', true);
-            showToast(err.message || 'Không thể thêm VĐV.', true);
+            showToast(err.message || 'Không thể thêm người chơi.', true);
         }
         return;
     }
@@ -1697,7 +1862,7 @@ document.addEventListener('submit', async (event) => {
             appState.modal = null;
             renderModal();
             setSaveStatus('Đã lưu ✓');
-            showToast('Đã cập nhật thông tin & trình độ VĐV.');
+            showToast('Đã cập nhật thông tin & trình độ người chơi.');
             renderAll();
         } catch (err) {
             setSaveStatus('Lỗi!', true);
@@ -1706,7 +1871,7 @@ document.addEventListener('submit', async (event) => {
         return;
     }
 
-    if (form.id === 'admin-match-meta-form') {
+    if (form.id === 'admin-match-meta-form' || form.classList.contains('admin-match-meta-form')) {
         const matchId = form.dataset.matchId;
         const fd = new FormData(form);
         const combinedSched = combineScheduleValue(fd.get('scheduled_date'), fd.get('scheduled_time'));
@@ -1736,9 +1901,13 @@ document.addEventListener('submit', async (event) => {
         const currentTeamsCount = appState.data.teams.length;
         const currentLevelsCount = normalizeConfig(appState.data.tournament?.config).levelsCount;
 
-        if ((targetTeams < currentTeamsCount || targetLevels < currentLevelsCount)
-            && !confirm('Giảm số đội hoặc số cặp sẽ xóa dữ liệu của các đội/cặp bị dư và trận liên quan. Tiếp tục?')) {
-            return;
+        if (targetTeams < currentTeamsCount || targetLevels < currentLevelsCount) {
+            const ok = await showConfirmDialog({
+                title: 'Giảm số đội hoặc số cặp?',
+                message: 'Dữ liệu của các đội/cặp bị dư và các trận liên quan sẽ bị xóa.',
+                confirmLabel: 'Tiếp tục'
+            });
+            if (!ok) return;
         }
 
         try {
@@ -1746,7 +1915,7 @@ document.addEventListener('submit', async (event) => {
             const duplicates = findDuplicateRosterPlayers(draftPairs);
             if (duplicates.length > 0) {
                 const d = duplicates[0];
-                showToast(`VĐV "${d.name}" bị chọn trùng ở ${d.slots.join(', ')}. Hãy xử lý trước khi áp dụng.`, true);
+                showToast(`Người chơi "${d.name}" bị chọn trùng ở ${d.slots.join(', ')}. Hãy xử lý trước khi áp dụng.`, true);
                 return;
             }
             setSaveStatus('Đang cập nhật quy mô...');
@@ -1794,8 +1963,13 @@ document.addEventListener('submit', async (event) => {
         const doubleRR = fd.get('doubleRoundRobin') === 'on';
         const hasExistingRr = appState.data.teamMatches.some((tm) => (tm.stage || 'round_robin') === 'round_robin');
 
-        if (hasExistingRr && !confirm('Sinh lại lịch vòng tròn sẽ thay thế toàn bộ lịch & tỉ số vòng tròn hiện tại (trận Playoff giữ nguyên). Tiếp tục?')) {
-            return;
+        if (hasExistingRr) {
+            const ok = await showConfirmDialog({
+                title: 'Tạo lại lịch vòng tròn?',
+                message: 'Toàn bộ lịch và tỉ số vòng tròn hiện tại sẽ bị thay thế (trận Chung kết / Playoff giữ nguyên).',
+                confirmLabel: 'Tạo lịch mới'
+            });
+            if (!ok) return;
         }
 
         try {
@@ -1904,6 +2078,7 @@ document.addEventListener('submit', async (event) => {
                     pointCap: Math.max(0, Number(fd.get('pointCap')) || 0),
                     winByTwo: fd.get('winByTwo') === 'on',
                     awardsVisibility: String(fd.get('awardsVisibility') || currentCfg.awardsVisibility || 'public'),
+                    awardsTopLimit: fd.has('awardsTopLimit') ? Number(fd.get('awardsTopLimit')) : currentCfg.awardsTopLimit,
                     levelNames
                 }
             });
@@ -1930,6 +2105,10 @@ document.addEventListener('focusout', () => {
 
 document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && appState.modal) {
+        if (appState.modal.type === 'confirm') {
+            resolveConfirmModal(false);
+            return;
+        }
         appState.modal = null;
         renderModal();
     }
@@ -1939,6 +2118,21 @@ if (typeof window !== 'undefined') {
     window.addEventListener('resize', () => {
         syncMobileHeaderHeight();
     }, { passive: true });
+
+    const handleRouteChange = () => {
+        if (isRegisterPageMode()) {
+            renderAll();
+            return;
+        }
+        const route = parseTabFromHash();
+        appState.activeTab = route.tab;
+        appState.adminState.subtab = route.adminSubtab;
+        appState.tvMode = false;
+        renderAll();
+    };
+
+    window.addEventListener('hashchange', handleRouteChange);
+    window.addEventListener('popstate', handleRouteChange);
 }
 
 async function bootstrap() {

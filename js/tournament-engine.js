@@ -31,8 +31,11 @@ export const DEFAULT_CONFIG = {
     doubleRoundRobin: false,
     registrationOpen: true,
     awardsVisibility: 'public',
-    awardsMaskSeed: 1
+    awardsMaskSeed: 1,
+    awardsTopLimit: 5
 };
+
+export const AWARDS_TOP_LIMITS = [3, 5, 10, 0];
 
 export const SKILL_LEVEL_OPTIONS = [
     'Lv1 - Bậc thầy lão luyện',
@@ -75,6 +78,8 @@ export function normalizeConfig(rawConfig) {
         : 'public';
     const rawMaskSeed = Number(merged.awardsMaskSeed);
     const awardsMaskSeed = Number.isFinite(rawMaskSeed) && rawMaskSeed >= 1 ? Math.floor(rawMaskSeed) : 1;
+    const rawTopLimit = merged.awardsTopLimit === undefined || merged.awardsTopLimit === null ? 5 : Number(merged.awardsTopLimit);
+    const awardsTopLimit = AWARDS_TOP_LIMITS.includes(rawTopLimit) ? rawTopLimit : 5;
 
     return {
         bestOf: [1, 3, 5].includes(Number(merged.bestOf)) ? Number(merged.bestOf) : 3,
@@ -86,7 +91,8 @@ export function normalizeConfig(rawConfig) {
         doubleRoundRobin: Boolean(merged.doubleRoundRobin),
         registrationOpen: merged.registrationOpen !== false,
         awardsVisibility,
-        awardsMaskSeed
+        awardsMaskSeed,
+        awardsTopLimit
     };
 }
 
@@ -665,7 +671,9 @@ export function normalizeRallyState(rawRally, pairA, pairB) {
     const rawReceiver = String(rawRally?.receiverSlot || '');
     const receiverSlot = oppOrder.includes(rawReceiver) ? rawReceiver : oppOrder[0];
 
-    const serveTurn = serverOrder.length > 1 && Number(rawRally?.serveTurn) === 2 ? 2 : 1;
+    const serveTurn = serverOrder.length > 1
+        ? (rawRally?.serveTurn == null ? 2 : (Number(rawRally.serveTurn) === 2 ? 2 : 1))
+        : 1;
     return { serverSlot, receiverSlot, serveTurn, orderA, orderB };
 }
 
@@ -764,7 +772,7 @@ export function advanceRallyServeTurn(rawRally, pairA, pairB) {
  * - 'receiver-win': +1 point to receiver, 0 Set score, advance serve turn (1->2->side-out).
  */
 export function applyRallyOutcomeToSet(rawStatsRow, rawScoreRow, rawRally, outcome, pairA, pairB) {
-    if (!['server-ace', 'receiver-error', 'server-out', 'receiver-win'].includes(outcome)) {
+    if (!VALID_RALLY_OUTCOMES.has(outcome)) {
         return null;
     }
 
@@ -782,7 +790,11 @@ export function applyRallyOutcomeToSet(rawStatsRow, rawScoreRow, rawRally, outco
     const serverSide = rally.serverSlot.startsWith('a') ? 'a' : 'b';
     const serverOrder = serverSide === 'a' ? rally.orderA : rally.orderB;
     const oppOrder = serverSide === 'a' ? rally.orderB : rally.orderA;
+    const partnerSlot = serverOrder.find((k) => k !== rally.serverSlot) || rally.serverSlot;
+    const recv1Slot = oppOrder[0] || rally.receiverSlot;
+    const recv2Slot = oppOrder[1] || oppOrder[0] || rally.receiverSlot;
     let nextRally = rally;
+    let actorSlot = null;
 
     const rotateServerAndReceiverOnScore = () => {
         const swappedServerOrder = serverOrder.length === 2 ? [serverOrder[1], serverOrder[0]] : [...serverOrder];
@@ -796,24 +808,44 @@ export function applyRallyOutcomeToSet(rawStatsRow, rawScoreRow, rawRally, outco
         };
     };
 
-    if (outcome === 'server-ace') {
-        statRow[rally.serverSlot].points = Math.min(99, statRow[rally.serverSlot].points + 1);
+    if (outcome === 'server-ace' || outcome === 'server-attack') {
+        actorSlot = rally.serverSlot;
+        statRow[actorSlot].points = Math.min(99, statRow[actorSlot].points + 1);
         setScore[serverSide] = Math.min(99, setScore[serverSide] + 1);
         nextRally = rotateServerAndReceiverOnScore();
+    } else if (outcome === 'partner-attack') {
+        actorSlot = partnerSlot;
+        statRow[actorSlot].points = Math.min(99, statRow[actorSlot].points + 1);
+        setScore[serverSide] = Math.min(99, setScore[serverSide] + 1);
+        nextRally = rotateServerAndReceiverOnScore();
+    } else if (outcome === 'recv1-defense') {
+        actorSlot = recv1Slot;
+        statRow[actorSlot].errors = Math.min(99, statRow[actorSlot].errors + 1);
+        nextRally = advanceRallyServeTurn(rally, pairA, pairB);
+    } else if (outcome === 'recv2-defense') {
+        actorSlot = recv2Slot;
+        statRow[actorSlot].errors = Math.min(99, statRow[actorSlot].errors + 1);
+        nextRally = advanceRallyServeTurn(rally, pairA, pairB);
+    } else if (outcome === 'serve-fault') {
+        actorSlot = rally.serverSlot;
+        nextRally = advanceRallyServeTurn(rally, pairA, pairB);
     } else if (outcome === 'receiver-error') {
+        actorSlot = rally.serverSlot;
         statRow[rally.serverSlot].points = Math.min(99, statRow[rally.serverSlot].points + 1);
         statRow[rally.receiverSlot].errors = Math.min(99, statRow[rally.receiverSlot].errors + 1);
         setScore[serverSide] = Math.min(99, setScore[serverSide] + 1);
         nextRally = rotateServerAndReceiverOnScore();
     } else if (outcome === 'server-out') {
+        actorSlot = rally.serverSlot;
         statRow[rally.serverSlot].errors = Math.min(99, statRow[rally.serverSlot].errors + 1);
         nextRally = advanceRallyServeTurn(rally, pairA, pairB);
     } else if (outcome === 'receiver-win') {
-        statRow[rally.receiverSlot].points = Math.min(99, statRow[rally.receiverSlot].points + 1);
+        actorSlot = rally.receiverSlot;
+        statRow[rally.receiverSlot].errors = Math.min(99, statRow[rally.receiverSlot].errors + 1);
         nextRally = advanceRallyServeTurn(rally, pairA, pairB);
     }
 
-    return { statRow, setScore, rally: nextRally };
+    return { statRow, setScore, rally: nextRally, actorSlot };
 }
 
 /**
@@ -988,7 +1020,7 @@ export function buildPlayerSelectOptionsHtml(catalog = [], otherAssignedKeys = n
 
     const renderOpt = (p) => `<option value="${escapeHtml(p.value)}" ${p.key === curKey ? 'selected' : ''}>${escapeHtml(p.label)}</option>`;
 
-    let optionsBody = `<option value="" ${!curVal ? 'selected' : ''}>— Chọn VĐV —</option>`;
+    let optionsBody = `<option value="" ${!curVal ? 'selected' : ''}>— Chọn người chơi —</option>`;
     if (curVal && !inLevelPool) {
         if (existingEntry) {
             const curLvlTag = existingEntry.levelIndex <= SKILL_LEVEL_OPTIONS.length ? `Lv${existingEntry.levelIndex}` : 'Chưa rõ';
@@ -1001,13 +1033,13 @@ export function buildPlayerSelectOptionsHtml(catalog = [], otherAssignedKeys = n
     if (available.length > 0) {
         optionsBody += available.map(renderOpt).join('');
     } else if (list.length === 0) {
-        optionsBody += '<option value="" disabled>Chưa có VĐV trong Đăng Ký</option>';
+        optionsBody += '<option value="" disabled>Chưa có người chơi trong Đăng Ký</option>';
     } else if (strictLevelMatch && levelPool.length === 0) {
-        optionsBody += `<option value="" disabled>Chưa có VĐV Level ${targetLevel} trong ĐK</option>`;
+        optionsBody += `<option value="" disabled>Chưa có người chơi Level ${targetLevel} trong ĐK</option>`;
     } else if (strictLevelMatch) {
-        optionsBody += `<option value="" disabled>Đã chọn hết VĐV Level ${targetLevel}</option>`;
+        optionsBody += `<option value="" disabled>Đã chọn hết người chơi Level ${targetLevel}</option>`;
     } else {
-        optionsBody += '<option value="" disabled>Đã chọn hết VĐV ĐK</option>';
+        optionsBody += '<option value="" disabled>Đã chọn hết người chơi ĐK</option>';
     }
 
     return optionsBody;
@@ -1078,7 +1110,18 @@ export function sumSubMatchPlayerStats(subMatch) {
     return totals;
 }
 
-const VALID_RALLY_OUTCOMES = new Set(['server-ace', 'receiver-error', 'server-out', 'receiver-win']);
+const VALID_RALLY_OUTCOMES = new Set([
+    'server-ace',
+    'server-attack',
+    'partner-attack',
+    'recv1-defense',
+    'recv2-defense',
+    'serve-fault',
+    'receiver-error',
+    'server-out',
+    'receiver-win'
+]);
+const SCORING_RALLY_OUTCOMES = new Set(['server-ace', 'server-attack', 'partner-attack', 'receiver-error']);
 const VALID_RALLY_SLOTS = new Set(['a1', 'a2', 'b1', 'b2']);
 
 /**
@@ -1095,8 +1138,9 @@ export function normalizeSetRallyLogs(rawLogs, setCount = 1) {
             if (!VALID_RALLY_OUTCOMES.has(item.outcome)) continue;
             const sSlot = VALID_RALLY_SLOTS.has(item.sSlot) ? item.sSlot : 'a1';
             const rSlot = VALID_RALLY_SLOTS.has(item.rSlot) ? item.rSlot : 'b1';
+            const aSlot = VALID_RALLY_SLOTS.has(item.aSlot) ? item.aSlot : '';
             const sSide = item.sSide === 'b' || sSlot.startsWith('b') ? 'b' : 'a';
-            const scored = Boolean(item.scored ?? (item.outcome === 'server-ace' || item.outcome === 'receiver-error'));
+            const scored = Boolean(item.scored ?? SCORING_RALLY_OUTCOMES.has(item.outcome));
             const sideOut = Boolean(item.sideOut);
             cleanList.push({
                 n: Math.max(1, Number(item.n) || cleanList.length + 1),
@@ -1104,6 +1148,7 @@ export function normalizeSetRallyLogs(rawLogs, setCount = 1) {
                 sSide,
                 sSlot,
                 rSlot,
+                ...(aSlot ? { aSlot } : {}),
                 turn: Number(item.turn) === 2 ? 2 : 1,
                 nextTurn: Number(item.nextTurn) === 2 ? 2 : 1,
                 sPos: Number(item.sPos) === 2 ? 2 : 1,
@@ -1152,13 +1197,14 @@ export function createRallyLogEntry({
         sSide,
         sSlot: cur.serverSlot,
         rSlot: cur.receiverSlot,
+        ...(result.actorSlot && VALID_RALLY_SLOTS.has(result.actorSlot) ? { aSlot: result.actorSlot } : {}),
         turn: cur.serveTurn,
         nextTurn: Number(result.rally?.serveTurn) === 2 ? 2 : 1,
         sPos: sPos === 2 ? 2 : 1,
         rPos: rPos === 2 ? 2 : 1,
         a: Math.max(0, Number(result.setScore?.a) || 0),
         b: Math.max(0, Number(result.setScore?.b) || 0),
-        scored: outcome === 'server-ace' || outcome === 'receiver-error',
+        scored: SCORING_RALLY_OUTCOMES.has(outcome),
         sideOut: nextSide !== sSide,
         call: `${serverScoreBefore}-${recvScoreBefore}-${cur.serveTurn}`,
         ts: String(timestamp || '')
@@ -1664,8 +1710,8 @@ export function buildResizedRoster(existingTeams, existingPairs, targetTeamCount
                 team_id: team.id,
                 level_index: lvl,
                 pair_label: existingPair?.pair_label || getPairLabel(team.code, lvl),
-                player_1: existingPair?.player_1 ?? `VĐV ${team.code}${lvl}-1`,
-                player_2: existingPair?.player_2 ?? `VĐV ${team.code}${lvl}-2`
+                player_1: existingPair?.player_1 ?? `Người chơi ${team.code}${lvl}-1`,
+                player_2: existingPair?.player_2 ?? `Người chơi ${team.code}${lvl}-2`
             });
         }
     }

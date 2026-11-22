@@ -114,7 +114,7 @@ export function renderEditRegistrationModal(reg) {
         <div class="modal-backdrop" data-action="close-modal">
             <div class="modal-card">
                 <div class="modal-header">
-                    <h3 class="modal-title">Chỉnh Sửa Thông Tin VĐV</h3>
+                    <h3 class="modal-title">Chỉnh Sửa Thông Tin Người Chơi</h3>
                     <button type="button" class="modal-close" data-action="close-modal" aria-label="Đóng">✕</button>
                 </div>
                 <form class="modal-body" id="admin-edit-registration-form" data-reg-id="${escapeHtml(reg.id)}">
@@ -170,29 +170,34 @@ function buildPlayerStatSideHtml(subId, setIdx, playersMeta, statsRow, teamColor
                     <span class="court-pos-badge ${posIdx === 0 ? 'right-court' : 'left-court'}" title="${posIdx === 0 ? 'Vị trí 1 (Phải / Ô chẵn)' : 'Vị trí 2 (Trái / Ô lẻ)'}">${posLabel}</span>
                     <span class="player-stat-name" style="border-left:3px solid ${escapeHtml(teamColor)};">${escapeHtml(playerName)}</span>
                     <div class="player-role-chips">
-                        <button type="button" class="rally-role-btn ${isServer ? 'is-server' : ''}" data-action="select-rally-role" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-role="server" data-slot="${slotKey}" aria-pressed="${isServer ? 'true' : 'false'}" title="Chọn làm người phát bóng">🎾 Phát</button>
-                        <button type="button" class="rally-role-btn ${isReceiver ? 'is-receiver' : ''}" data-action="select-rally-role" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-role="receiver" data-slot="${slotKey}" aria-pressed="${isReceiver ? 'true' : 'false'}" title="Chọn làm người đỡ bóng">🛡 Đỡ</button>
+                        <button type="button" class="rally-role-btn ${isServer ? 'is-server' : ''}" data-action="select-rally-role" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-role="server" data-slot="${slotKey}" aria-pressed="${isServer ? 'true' : 'false'}" title="Chọn làm người phát bóng">Phát</button>
+                        <button type="button" class="rally-role-btn ${isReceiver ? 'is-receiver' : ''}" data-action="select-rally-role" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-role="receiver" data-slot="${slotKey}" aria-pressed="${isReceiver ? 'true' : 'false'}" title="Chọn làm người đỡ bóng">Đỡ</button>
                     </div>
                 </div>
                 <div class="player-stat-readouts">
-                    <span class="stat-pill pts tabular" title="Điểm cá nhân VĐV (tự động tăng qua nút pha bóng)">
-                        <span class="stat-lbl">Điểm</span>
+                    <span class="stat-pill pts tabular" title="Điểm Tấn Công (Chiến Thần Tấn Công)">
+                        <span class="stat-lbl">Tấn công</span>
                         <strong>${entry.points}</strong>
                     </span>
-                    <span class="stat-pill errs tabular" title="Out / Không qua lưới (tự động tăng qua nút pha bóng)">
-                        <span class="stat-lbl">Out/Lưới</span>
+                    <span class="stat-pill defs tabular" title="Điểm Phòng Thủ (Bậc Thầy Phòng Thủ)">
+                        <span class="stat-lbl">Phòng thủ</span>
                         <strong>${entry.errors}</strong>
                     </span>
                 </div>
             </div>
         `;
     }).join('');
+    const isServingSide = (sideKey === 'a' && rallyState.serverSlot.startsWith('a'))
+        || (sideKey === 'b' && rallyState.serverSlot.startsWith('b'));
     return `
-        <div class="set-player-side">
+        <div class="set-player-side ${isServingSide ? 'is-serving-side' : 'is-receiving-side'}" style="--side-color:${escapeHtml(teamColor)};">
             <div class="set-player-side-head">
-                <span class="set-player-side-title">${escapeHtml(sideTitle)}</span>
+                <div class="set-player-side-label">
+                    <span class="set-player-side-title">${escapeHtml(sideTitle)}</span>
+                    ${isServingSide ? '<span class="serving-side-tag">Đang phát</span>' : ''}
+                </div>
                 ${orderedSlots.length > 1
-            ? `<button type="button" class="btn-swap-court" data-action="swap-court-order" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-side="${escapeHtml(sideKey)}" title="Đổi vị trí 1 (Phải) ↔ 2 (Trái) cho cặp này">⇄ Đổi vị trí 1↔2</button>`
+            ? `<button type="button" class="btn-swap-court" data-action="swap-court-order" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-side="${escapeHtml(sideKey)}" title="Đổi vị trí 1 (Phải) ↔ 2 (Trái) cho cặp này">Đổi vị trí 1-2</button>`
             : ''
         }
             </div>
@@ -260,11 +265,11 @@ function renderScoreOperatorSubtab(state, adminState) {
             : `${teamB?.code || 'B'}${sm.level_index}`;
 
         const sideAMeta = [
-            [pairA?.player_1 || `${pairA?.pair_label || 'A'} · VĐV 1`, 'a1'],
+            [pairA?.player_1 || `${pairA?.pair_label || 'A'} · Người chơi 1`, 'a1'],
             ...(pairA?.player_2 ? [[pairA.player_2, 'a2']] : [])
         ];
         const sideBMeta = [
-            [pairB?.player_1 || `${pairB?.pair_label || 'B'} · VĐV 1`, 'b1'],
+            [pairB?.player_1 || `${pairB?.pair_label || 'B'} · Người chơi 1`, 'b1'],
             ...(pairB?.player_2 ? [[pairB.player_2, 'b2']] : [])
         ];
 
@@ -280,13 +285,9 @@ function renderScoreOperatorSubtab(state, adminState) {
                 ? 'set-state-completed'
                 : (isSetLive ? 'set-state-live' : 'set-state-waiting');
 
-            const winBadge = setWinner === 'A'
-                ? `<span class="tag tag-status-completed">✓ ${escapeHtml(pairA?.pair_label || 'A')} thắng Set ${setIdx + 1}</span>`
-                : (setWinner === 'B'
-                    ? `<span class="tag tag-status-completed">✓ ${escapeHtml(pairB?.pair_label || 'B')} thắng Set ${setIdx + 1}</span>`
-                    : (isSetLive
-                        ? `<span class="tag tag-status-live"><span class="pulse-dot"></span>Set ${setIdx + 1}</span>`
-                        : `<span class="tag tag-status-muted">Set ${setIdx + 1}</span>`));
+            const winBadge = isSetLive
+                ? `<span class="tag tag-status-live"><span class="pulse-dot"></span>Set ${setIdx + 1}</span>`
+                : `<span class="tag tag-status-muted">Set ${setIdx + 1}</span>`;
 
             const rowStats = setStats[setIdx];
             const setLogCount = (setRallyLogs[setIdx] || []).length;
@@ -296,27 +297,37 @@ function renderScoreOperatorSubtab(state, adminState) {
                 ? adminState.rallyUndoBySet[rallyKey].length
                 : 0;
             const playerLabelBySlot = new Map([...sideAMeta, ...sideBMeta].map(([lbl, slot]) => [slot, lbl]));
-            const serverName = playerLabelBySlot.get(rallyState.serverSlot) || 'Người phát';
-            const receiverName = playerLabelBySlot.get(rallyState.receiverSlot) || 'Người đỡ';
             const serverHasPartner = rallyState.serverSlot.startsWith('a') ? sideAMeta.length > 1 : sideBMeta.length > 1;
             const nextFaultLabel = rallyState.serveTurn === 1 && serverHasPartner ? '→ Phát 2' : '→ Đổi giao';
-            const serverOrderArr = rallyState.serverSlot.startsWith('a') ? rallyState.orderA : rallyState.orderB;
             const oppOrderArr = rallyState.serverSlot.startsWith('a') ? rallyState.orderB : rallyState.orderA;
-            const serverPosNum = Math.max(1, serverOrderArr.indexOf(rallyState.serverSlot) + 1);
-            const recvPosNum = Math.max(1, oppOrderArr.indexOf(rallyState.receiverSlot) + 1);
-            const serverCourtSide = serverPosNum === 1 ? 'Phải' : 'Trái';
-            const recvCourtSide = recvPosNum === 1 ? 'Phải' : 'Trái';
+            const serverIsSideA = rallyState.serverSlot.startsWith('a');
+            const teamAColor = teamA?.color || '#2563EB';
+            const teamBColor = teamB?.color || '#0E7C5B';
+
+            const buildRallyPlayerBtn = (slotKey, sideKey) => {
+                if (!slotKey) return '';
+                const pName = playerLabelBySlot.get(slotKey) || slotKey.toUpperCase();
+                const isAttacking = (sideKey === 'a') === serverIsSideA;
+                const tColor = sideKey === 'a' ? teamAColor : teamBColor;
+                if (isAttacking) {
+                    const outcome = slotKey === rallyState.serverSlot ? 'server-attack' : 'partner-attack';
+                    return `<button type="button" class="btn-rally btn-rally-point" style="--btn-team-color:${escapeHtml(tColor)};" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="${outcome}" title="${escapeHtml(pName)} tấn công chính xác: +1 Tấn công, +1 Điểm Set, đổi sân Phải↔Trái">${escapeHtml(pName)}</button>`;
+                }
+                const oppIdx = oppOrderArr.indexOf(slotKey);
+                const outcome = oppIdx === 1 ? 'recv2-defense' : 'recv1-defense';
+                return `<button type="button" class="btn-rally btn-rally-recv-win" style="--btn-team-color:${escapeHtml(tColor)};" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="${outcome}" title="${escapeHtml(pName)} phòng thủ thành công: +1 Phòng thủ &amp; đổi lượt (${nextFaultLabel})">${escapeHtml(pName)}</button>`;
+            };
 
             const rightBoardBadge = setWinner === 'B'
-                ? '<span class="set-auto-badge win">🏆 WIN</span>'
+                ? '<span class="set-auto-badge win">WIN</span>'
                 : (!setWinner
                     ? (isSetLive
-                        ? '<span class="set-auto-badge live">● ĐANG ĐẤU</span>'
+                        ? '<span class="set-auto-badge live">ĐANG ĐẤU</span>'
                         : '<span class="set-auto-badge waiting">CHỜ ĐẤU</span>')
                     : '');
 
-            const sideAHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideAMeta, rowStats, teamA?.color || '#2563EB', `Cặp ${pairA?.pair_label || 'A'}`, rallyState, 'a');
-            const sideBHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideBMeta, rowStats, teamB?.color || '#E05328', `Cặp ${pairB?.pair_label || 'B'}`, rallyState, 'b');
+            const sideAHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideAMeta, rowStats, teamAColor, `Cặp ${pairA?.pair_label || 'A'}`, rallyState, 'a');
+            const sideBHtml = buildPlayerStatSideHtml(sm.id, setIdx, sideBMeta, rowStats, teamBColor, `Cặp ${pairB?.pair_label || 'B'}`, rallyState, 'b');
 
             return `
                 <div class="set-editor-block ${setStateCls}" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">
@@ -327,7 +338,7 @@ function renderScoreOperatorSubtab(state, adminState) {
                         </div>
 
                         <div class="set-readonly-board" title="Tỉ số Set tự cập nhật khi bên Phát ghi điểm (hiển thị WIN ngay bên đội thắng Set)">
-                            ${setWinner === 'A' ? '<span class="set-auto-badge win">🏆 WIN</span>' : ''}
+                            ${setWinner === 'A' ? '<span class="set-auto-badge win">WIN</span>' : ''}
                             <span class="set-team-tag" style="color:${escapeHtml(teamA?.color || '#2563EB')};">${escapeHtml(pairA?.pair_label || 'A')}</span>
                             <span class="set-score-pill tabular">${Number(s.a) || 0}</span>
                             <span class="set-score-sep">:</span>
@@ -337,7 +348,7 @@ function renderScoreOperatorSubtab(state, adminState) {
                         </div>
 
                         <div class="set-sticky-actions">
-                            <button type="button" class="btn btn-secondary btn-sm" data-action="reset-set-stats" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" title="Đặt lại điểm Set và thống kê cá nhân Set này về 0">⟲ Đặt lại Set</button>
+                            <button type="button" class="btn btn-secondary btn-sm" data-action="reset-set-stats" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" title="Đặt lại điểm Set và thống kê cá nhân Set này về 0">Đặt lại Set</button>
                             ${sets.length > 1
                     ? `<button type="button" class="btn btn-danger btn-sm" data-action="remove-set" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}">Xóa Set</button>`
                     : ''
@@ -353,18 +364,14 @@ function renderScoreOperatorSubtab(state, adminState) {
                                     <button type="button" class="serve-turn-btn ${rallyState.serveTurn === 1 ? 'active' : ''}" data-action="set-serve-turn" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-turn="1">Phát 1</button>
                                     <button type="button" class="serve-turn-btn ${rallyState.serveTurn === 2 ? 'active' : ''}" data-action="set-serve-turn" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-turn="2" ${!serverHasPartner ? 'disabled' : ''}>Phát 2</button>
                                 </div>
-                                <span class="rally-matchup-pill">
-                                    🎾 <strong>${escapeHtml(serverName)}</strong> <span class="rally-turn-chip">#${serverPosNum} · ${serverCourtSide} · Phát ${rallyState.serveTurn}</span>
-                                    <span class="rally-arrow">➔</span>
-                                    🛡 <strong>${escapeHtml(receiverName)}</strong> <span class="rally-recv-chip">#${recvPosNum} · ${recvCourtSide} Đỡ</span>
-                                </span>
                             </div>
                             <div class="rally-actions-wrap">
-                                <button type="button" class="btn-rally btn-rally-point" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="server-ace" title="${escapeHtml(serverName)} tấn công chính xác: +1đ, +1 Điểm Set, giữ Phát ${rallyState.serveTurn}, đổi sân Phải↔Trái &amp; đổi người đỡ chéo sân">${escapeHtml(serverName)} tấn công chính xác</button>
-                                <button type="button" class="btn-rally btn-rally-recv-err" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="receiver-error" title="${escapeHtml(receiverName)} đỡ hỏng: +1đ ${escapeHtml(serverName)}, +1 Out ${escapeHtml(receiverName)}, +1 Điểm Set, đổi sân Phải↔Trái &amp; đổi người đỡ chéo sân">${escapeHtml(receiverName)} đỡ hỏng</button>
-                                <button type="button" class="btn-rally btn-rally-serve-err" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="server-out" title="${escapeHtml(serverName)} phát hỏng/Out: +1 Out/Lưới &amp; chuyển lượt (${nextFaultLabel}), không cộng điểm Set cho 2 bên">${escapeHtml(serverName)} phát hỏng</button>
-                                <button type="button" class="btn-rally btn-rally-recv-win" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="receiver-win" title="${escapeHtml(receiverName)} phòng thủ thành công: +1đ cá nhân cho ${escapeHtml(receiverName)}, không cộng điểm Set &amp; chuyển lượt (${nextFaultLabel})">${escapeHtml(receiverName)} phòng thủ thành công</button>
-                                <button type="button" class="btn-rally btn-rally-undo" data-action="undo-rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" ${undoCount === 0 ? 'disabled' : ''} title="Hoàn tác pha bóng vừa bấm gần nhất trong Set này">↩ Hoàn tác${undoCount > 0 ? ` (${undoCount})` : ''}</button>
+                                ${buildRallyPlayerBtn(rallyState.orderA[0], 'a')}
+                                ${buildRallyPlayerBtn(rallyState.orderB[0], 'b')}
+                                ${buildRallyPlayerBtn(rallyState.orderA[1], 'a')}
+                                ${buildRallyPlayerBtn(rallyState.orderB[1], 'b')}
+                                <button type="button" class="btn-rally btn-rally-fault" data-action="rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" data-outcome="serve-fault" title="Phát hỏng hoặc tấn công thất bại: không trừ điểm, chỉ chuyển lượt (${nextFaultLabel})">Phát hỏng</button>
+                                <button type="button" class="btn-rally btn-rally-undo" data-action="undo-rally-outcome" data-sub-id="${escapeHtml(sm.id)}" data-set-idx="${setIdx}" ${undoCount === 0 ? 'disabled' : ''} title="Hoàn tác pha bóng vừa bấm gần nhất trong Set này">Hoàn tác${undoCount > 0 ? ` (${undoCount})` : ''}</button>
                             </div>
                         </div>
                         <div class="set-player-cols">
@@ -385,13 +392,14 @@ function renderScoreOperatorSubtab(state, adminState) {
         const pairANames = pairA ? `${pairA.player_1}${pairA.player_2 ? ` / ${pairA.player_2}` : ''}` : pairACode;
         const pairBNames = pairB ? `${pairB.player_1}${pairB.player_2 ? ` / ${pairB.player_2}` : ''}` : pairBCode;
         const lvlTier = Math.max(1, Math.min(4, Number(sm.level_index) || 1));
-        const subStatusBadge = subStatus === 'live'
-            ? '<span class="tag tag-status-live"><span class="pulse-dot"></span>ĐANG ĐẤU</span>'
-            : (subStatus === 'ready'
-                ? '<span class="tag tag-status-ready">⏳ SẮP ĐẤU</span>'
-                : (subStatus === 'completed'
-                    ? '<span class="tag tag-status-completed">✓ ĐÃ XONG</span>'
-                    : '<span class="tag tag-status-muted">Chưa đấu</span>'));
+        const hasStartedSub = subStatus === 'live'
+            || subStatus === 'completed'
+            || ev.setsWonA > 0
+            || ev.setsWonB > 0
+            || sets.some((st) => Number(st.a) > 0 || Number(st.b) > 0);
+        const centerMatchupBadge = hasStartedSub
+            ? `<span class="scorer-vs-badge has-score tabular">${ev.setsWonA} - ${ev.setsWonB}</span>`
+            : '<span class="scorer-vs-badge">VS</span>';
 
         return `
             <div class="scorer-sub-card status-${escapeHtml(subStatus)} lv-${lvlTier}">
@@ -404,52 +412,32 @@ function renderScoreOperatorSubtab(state, adminState) {
                         </div>
                         <span class="level-pill lv-${lvlTier}">${escapeHtml(levelName)}</span>
                     </div>
-                    <div class="scorer-sub-statusgroup">
-                        ${subStatusBadge}
-                        <span class="tag ${ev.winner ? 'tag-status-completed' : 'tag-round'}">
-                            Final: ${ev.setsWonA} - ${ev.setsWonB}${ev.winner ? ` (${ev.winner === 'A' ? escapeHtml(pairA?.pair_label || 'A') : escapeHtml(pairB?.pair_label || 'B')} thắng)` : ''}
-                        </span>
-                    </div>
                 </div>
 
                 <div class="scorer-sub-matchup">
                     <div class="scorer-pair-chip side-a">
                         <span class="scorer-pair-code" style="background:${escapeHtml(teamA?.color || '#2563EB')}">${escapeHtml(pairACode)}</span>
-                        <span class="scorer-pair-names">${escapeHtml(pairANames)}</span>
+                        <div class="scorer-pair-names">
+                            ${String(pairANames || '').split(/\s*\/\s*/).map((n) => n.trim()).filter(Boolean).map((n) => `<span class="scorer-player-line" title="${escapeHtml(n)}">${escapeHtml(n)}</span>`).join('')}
+                        </div>
                     </div>
-                    <span class="scorer-vs-badge">VS</span>
+                    ${centerMatchupBadge}
                     <div class="scorer-pair-chip side-b">
                         <span class="scorer-pair-code" style="background:${escapeHtml(teamB?.color || '#E05328')}">${escapeHtml(pairBCode)}</span>
-                        <span class="scorer-pair-names">${escapeHtml(pairBNames)}</span>
+                        <div class="scorer-pair-names">
+                            ${String(pairBNames || '').split(/\s*\/\s*/).map((n) => n.trim()).filter(Boolean).map((n) => `<span class="scorer-player-line" title="${escapeHtml(n)}">${escapeHtml(n)}</span>`).join('')}
+                        </div>
                     </div>
                 </div>
 
                 <div class="scorer-sub-toolbar">
                     <div class="scorer-sub-status-row">
-                        <button type="button" class="quick-chip upcoming ${subStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming" title="Ẩn trên màn hình Live">Chưa đấu</button>
-                        <button type="button" class="quick-chip ready ${subStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready" title="Hiện trên màn hình Live để chuẩn bị lên sân">⏳ Sắp đấu</button>
-                        <button type="button" class="quick-chip live ${subStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">● Đang đấu</button>
-                        <button type="button" class="quick-chip completed ${subStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">✓ Xong</button>
+                        <button type="button" class="quick-chip upcoming ${subStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming">Chưa đấu</button>
+                        <button type="button" class="quick-chip ready ${subStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready">Sắp đấu</button>
+                        <button type="button" class="quick-chip live ${subStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">Đang đấu</button>
+                        <button type="button" class="quick-chip completed ${subStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">Hoàn thành</button>
                     </div>
                     <div class="scorer-sub-settings-grid">
-                        <div>
-                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Thể thức</label>
-                            <select class="select-clean" data-action="sub-bestof" data-sub-id="${escapeHtml(sm.id)}" title="Thể thức set riêng cho trận này">
-                                <option value="default" ${currentBestOf === 'default' ? 'selected' : ''}>Mặc định (Bo${config.bestOf})</option>
-                                <option value="1" ${currentBestOf === '1' ? 'selected' : ''}>Bo1 (1 Set)</option>
-                                <option value="3" ${currentBestOf === '3' ? 'selected' : ''}>Bo3 (Thắng 2)</option>
-                                <option value="5" ${currentBestOf === '5' ? 'selected' : ''}>Bo5 (Thắng 3)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Điểm/Set</label>
-                            <select class="select-clean" data-action="sub-points" data-sub-id="${escapeHtml(sm.id)}" title="Số điểm mỗi set">
-                                <option value="default" ${currentPts === 'default' ? 'selected' : ''}>Mặc định (${config.pointsPerSet}đ)</option>
-                                <option value="11" ${currentPts === '11' ? 'selected' : ''}>11 điểm</option>
-                                <option value="15" ${currentPts === '15' ? 'selected' : ''}>15 điểm</option>
-                                <option value="21" ${currentPts === '21' ? 'selected' : ''}>21 điểm</option>
-                            </select>
-                        </div>
                         <div>
                             <label class="form-label" style="font-size:11px;margin-bottom:3px;">Sân riêng</label>
                             <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="court" value="${escapeHtml(ovCourt)}" placeholder="Theo trận (${escapeHtml(match.court || 'Sân 1')})">
@@ -473,62 +461,27 @@ function renderScoreOperatorSubtab(state, adminState) {
     return `
         <div>
             <div class="form-group">
-                <label class="form-label" for="admin-select-match">Chọn Cuộc Đối Đầu (Team Match) để nhập tỉ số</label>
+                <label class="form-label" for="admin-select-match">Trận đấu</label>
                 <select id="admin-select-match" class="form-select" data-action="admin-select-match">
                     ${matchOptions}
                 </select>
             </div>
 
-            <form id="admin-match-meta-form" data-match-id="${escapeHtml(match.id)}" class="admin-match-meta-form">
-                <div class="admin-tm-head-bar">
-                    <div class="admin-tm-matchup-row">
-                        <div class="admin-tm-side left">
-                            <span class="team-code-dot sm" style="background:${escapeHtml(teamA?.color || '#0E7C5B')}">${escapeHtml(teamA?.code || 'A')}</span>
-                            <strong>${escapeHtml(teamA?.name || 'Đội A')}</strong>
-                        </div>
-                        <span class="admin-tm-score tabular">
-                            ${evalTm.subWinsA} : ${evalTm.subWinsB}
-                        </span>
-                        <div class="admin-tm-side right">
-                            <strong>${escapeHtml(teamB?.name || 'Đội B')}</strong>
-                            <span class="team-code-dot sm" style="background:${escapeHtml(teamB?.color || '#E05328')}">${escapeHtml(teamB?.code || 'B')}</span>
-                        </div>
+            <div class="admin-tm-summary-bar">
+                <div class="admin-tm-matchup-row">
+                    <div class="admin-tm-side left">
+                        <span class="team-code-dot sm" style="background:${escapeHtml(teamA?.color || '#0E7C5B')}">${escapeHtml(teamA?.code || 'A')}</span>
+                        <strong>${escapeHtml(teamA?.name || 'Đội A')}</strong>
                     </div>
-                    <div class="admin-tm-quick-bar">
-                        <button type="button" class="quick-chip ${match.status === 'upcoming' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="upcoming">Sắp đấu</button>
-                        <button type="button" class="quick-chip live ${match.status === 'live' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="live">● LIVE</button>
-                        <button type="button" class="quick-chip ${match.status === 'completed' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(match.id)}" data-status="completed">✓ Xong</button>
-                        <button type="submit" class="btn btn-primary btn-sm">Lưu</button>
+                    <span class="admin-tm-score tabular">
+                        ${evalTm.subWinsA} : ${evalTm.subWinsB}
+                    </span>
+                    <div class="admin-tm-side right">
+                        <strong>${escapeHtml(teamB?.name || 'Đội B')}</strong>
+                        <span class="team-code-dot sm" style="background:${escapeHtml(teamB?.color || '#E05328')}">${escapeHtml(teamB?.code || 'B')}</span>
                     </div>
                 </div>
-
-                <div class="admin-tm-meta-grid">
-                    <div>
-                        <label class="form-label">Trạng thái Team Match</label>
-                        <select name="status" class="form-select">
-                            <option value="upcoming" ${match.status === 'upcoming' ? 'selected' : ''}>Sắp diễn ra</option>
-                            <option value="live" ${match.status === 'live' ? 'selected' : ''}>Đang đấu (LIVE)</option>
-                            <option value="completed" ${match.status === 'completed' ? 'selected' : ''}>Hoàn thành</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="form-label">Sân mặc định (cả trận)</label>
-                        <input name="court" class="form-input" value="${escapeHtml(match.court)}" placeholder="VD: Sân 1">
-                    </div>
-                    <div>
-                        <label class="form-label">Ngày thi đấu</label>
-                        <input type="date" name="scheduled_date" class="form-input" value="${escapeHtml(parseScheduleValue(match.scheduled_time).date)}">
-                    </div>
-                    <div>
-                        <label class="form-label">Giờ thi đấu</label>
-                        <input name="scheduled_time" class="form-input" value="${escapeHtml(parseScheduleValue(match.scheduled_time).time)}" placeholder="09:30">
-                    </div>
-                    <div class="admin-meta-note-field">
-                        <label class="form-label">Ghi chú</label>
-                        <input name="note" class="form-input" value="${escapeHtml(match.note)}" placeholder="VD: Trận tâm điểm">
-                    </div>
-                </div>
-            </form>
+            </div>
 
             ${subCardsHtml}
         </div>
@@ -566,16 +519,21 @@ function renderTeamsEditorSubtab(state, adminState) {
     const assignedRegisteredCount = catalog.filter((p) => (assignedCounts.get(p.key) || 0) > 0).length;
     const remainingPoolCount = Math.max(0, catalog.length - assignedRegisteredCount);
     const poolBadgeText = catalog.length > 0
-        ? `Chờ xếp: ${remainingPoolCount}/${catalog.length} VĐV`
-        : 'Chưa có VĐV ĐK';
+        ? `Chờ xếp: ${remainingPoolCount}/${catalog.length} người chơi`
+        : 'Chưa có người chơi ĐK';
 
     const teamEditorsHtml = teams.map((team) => {
         const pairs = (state.teamPairs || [])
             .filter((p) => p.team_id === team.id)
             .sort((a, b) => a.level_index - b.level_index);
 
+        const filledSlots = pairs.reduce((acc, p) => acc + (String(p.player_1 || '').trim() ? 1 : 0) + (String(p.player_2 || '').trim() ? 1 : 0), 0);
+        const totalSlots = config.levelsCount * 2;
+        const isTeamComplete = filledSlots >= totalSlots;
+
         const pairRowsHtml = Array.from({ length: config.levelsCount }, (_, i) => {
             const lvl = i + 1;
+            const lvlTier = Math.max(1, Math.min(4, lvl));
             const pair = pairs.find((p) => p.level_index === lvl) || {
                 id: `pair_${team.id}_l${lvl}`,
                 pair_label: `${team.code}${lvl}`,
@@ -591,14 +549,14 @@ function renderTeamsEditorSubtab(state, adminState) {
             return `
                 <div class="roster-pair-row">
                     <div class="roster-pair-head">
-                        <span class="level-pill">${escapeHtml(levelLabel)}</span>
+                        <span class="level-pill lv-${lvlTier}">${escapeHtml(levelLabel)}</span>
                         <input class="form-input roster-pair-label-input" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="pair_label" value="${escapeHtml(pair.pair_label)}" placeholder="${escapeHtml(team.code)}${lvl}" aria-label="Mã cặp">
                     </div>
                     <div class="roster-pair-players">
-                        <select class="form-select roster-player-select" data-action="roster-player-select" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_1" aria-label="VĐV 1 ${escapeHtml(pair.pair_label)}">
+                        <select class="form-select roster-player-select" data-action="roster-player-select" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_1" aria-label="Người chơi 1 ${escapeHtml(pair.pair_label)}">
                             ${p1Opts}
                         </select>
-                        <select class="form-select roster-player-select" data-action="roster-player-select" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_2" aria-label="VĐV 2 ${escapeHtml(pair.pair_label)}">
+                        <select class="form-select roster-player-select" data-action="roster-player-select" data-team-id="${escapeHtml(team.id)}" data-level="${lvl}" data-field="player_2" aria-label="Người chơi 2 ${escapeHtml(pair.pair_label)}">
                             ${p2Opts}
                         </select>
                     </div>
@@ -622,7 +580,10 @@ function renderTeamsEditorSubtab(state, adminState) {
                         <input type="color" class="form-input roster-color-input" data-team-meta="${escapeHtml(team.id)}" data-field="color" value="${escapeHtml(team.color)}">
                     </div>
                 </div>
-                <div class="roster-lineup-kicker">ĐỘI HÌNH CỐ ĐỊNH (FIXED LINEUP)</div>
+                <div class="roster-lineup-head">
+                    <span class="roster-lineup-kicker">Đội hình cố định</span>
+                    <span class="roster-slot-pill ${isTeamComplete ? 'is-done' : ''}">${filledSlots}/${totalSlots}${isTeamComplete ? '' : ''}</span>
+                </div>
                 <div class="roster-pairs-list">
                     ${pairRowsHtml}
                 </div>
@@ -648,7 +609,7 @@ function renderTeamsEditorSubtab(state, adminState) {
 
             <div class="roster-section-head">
                 <div class="roster-section-title-wrap">
-                    <h3 class="roster-section-title">Tên Đội &amp; Đội Hình</h3>
+                    <h3 class="roster-section-title">Danh Sách Đội</h3>
                     <span id="roster-pool-badge" class="roster-pool-badge ${remainingPoolCount === 0 && catalog.length > 0 ? 'is-done' : ''}">${escapeHtml(poolBadgeText)}</span>
                 </div>
                 <button type="button" class="btn btn-primary btn-sm roster-save-btn" data-action="save-all-roster">Lưu đội hình</button>
@@ -688,23 +649,62 @@ function renderScheduleEditorSubtab(state) {
         const courtSummary = courtsList.join(' · ');
         const schedSummary = formatScheduleRaw(tm.scheduled_time);
         const metaText = [courtSummary, schedSummary].filter(Boolean).join(' · ');
+        const parsedSched = parseScheduleValue(tm.scheduled_time);
+        const statusTag = tm.status === 'live'
+            ? '<span class="tag tag-status-live"><span class="pulse-dot"></span>LIVE</span>'
+            : (tm.status === 'completed'
+                ? '<span class="tag tag-status-completed">Hoàn thành</span>'
+                : '<span class="tag tag-status-upcoming">Sắp đấu</span>');
 
         return `
-            <div class="sched-match-row">
-                <div class="sched-match-info">
-                    <div class="sched-match-top">
-                        <span class="tag ${tm.stage === 'playoff' ? 'tag-playoff' : 'tag-round'}">${escapeHtml(tm.round_name)}</span>
-                        ${metaText ? `<span class="sched-match-meta">${escapeHtml(metaText)}</span>` : ''}
+            <div class="sched-match-card">
+                <div class="sched-match-row">
+                    <div class="sched-match-info">
+                        <div class="sched-match-top">
+                            <span class="tag ${tm.stage === 'playoff' ? 'tag-playoff' : 'tag-round'}">${escapeHtml(tm.round_name)}</span>
+                            ${statusTag}
+                            ${metaText ? `<span class="sched-match-meta">${escapeHtml(metaText)}</span>` : ''}
+                        </div>
+                        <div class="sched-match-teams">
+                            <strong class="sched-team-name">${escapeHtml(tA?.name || '?')}</strong>
+                            <span class="sched-score-pill tabular">${ev.subWinsA} – ${ev.subWinsB}</span>
+                            <strong class="sched-team-name">${escapeHtml(tB?.name || '?')}</strong>
+                        </div>
                     </div>
-                    <div class="sched-match-teams">
-                        <strong class="sched-team-name">${escapeHtml(tA?.name || '?')}</strong>
-                        <span class="sched-score-pill tabular">${ev.subWinsA} – ${ev.subWinsB}</span>
-                        <strong class="sched-team-name">${escapeHtml(tB?.name || '?')}</strong>
+                    <div class="sched-match-actions">
+                        <button type="button" class="btn btn-secondary btn-sm sched-row-btn" data-action="toggle-sched-edit" data-match-id="${escapeHtml(tm.id)}" aria-expanded="false">Cài đặt trận</button>
+                        <button type="button" class="btn btn-secondary btn-sm sched-row-btn" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Nhập điểm</button>
+                        <button type="button" class="btn btn-danger btn-sm sched-row-btn" data-action="delete-match" data-match-id="${escapeHtml(tm.id)}">Xóa</button>
                     </div>
                 </div>
-                <div class="sched-match-actions">
-                    <button type="button" class="btn btn-secondary btn-sm sched-row-btn" data-action="admin-edit-match" data-match-id="${escapeHtml(tm.id)}">Nhập điểm</button>
-                    <button type="button" class="btn btn-danger btn-sm sched-row-btn" data-action="delete-match" data-match-id="${escapeHtml(tm.id)}">Xóa</button>
+                <div class="sched-match-edit-panel hidden" data-sched-edit-panel="${escapeHtml(tm.id)}">
+                    <form data-match-id="${escapeHtml(tm.id)}" class="admin-match-meta-form sched-inline-meta-form">
+                        <input type="hidden" name="status" value="${escapeHtml(tm.status)}">
+                        <div class="admin-tm-quick-bar" style="margin-bottom:10px;">
+                            <button type="button" class="quick-chip ${tm.status === 'upcoming' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(tm.id)}" data-status="upcoming">Sắp đấu</button>
+                            <button type="button" class="quick-chip live ${tm.status === 'live' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(tm.id)}" data-status="live">Trực tiếp</button>
+                            <button type="button" class="quick-chip ${tm.status === 'completed' ? 'active' : ''}" data-action="quick-match-status" data-match-id="${escapeHtml(tm.id)}" data-status="completed">Hoàn thành</button>
+                            <button type="submit" class="btn btn-primary btn-sm">Lưu</button>
+                        </div>
+                        <div class="admin-tm-meta-grid sched-meta-grid-3">
+                            <div>
+                                <label class="form-label">Sân đấu</label>
+                                <input name="court" class="form-input" value="${escapeHtml(tm.court)}" placeholder="VD: Sân 1">
+                            </div>
+                            <div>
+                                <label class="form-label">Ngày thi đấu</label>
+                                <input type="date" name="scheduled_date" class="form-input" value="${escapeHtml(parsedSched.date)}">
+                            </div>
+                            <div>
+                                <label class="form-label">Giờ thi đấu</label>
+                                <input name="scheduled_time" class="form-input" value="${escapeHtml(parsedSched.time)}" placeholder="09:30">
+                            </div>
+                            <div class="admin-meta-note-field">
+                                <label class="form-label">Ghi chú</label>
+                                <input name="note" class="form-input" value="${escapeHtml(tm.note)}" placeholder="VD: Trận tâm điểm">
+                            </div>
+                        </div>
+                    </form>
                 </div>
             </div>
         `;
@@ -714,41 +714,41 @@ function renderScheduleEditorSubtab(state) {
         <div class="sched-admin-wrap">
             <form id="admin-generate-rr-form" class="sched-rr-bar">
                 <div class="sched-rr-head">
-                    <span class="sched-rr-title">Sinh Lịch Vòng Tròn</span>
+                    <span class="sched-rr-title">Tạo lịch thi đấu vòng tròn</span>
                     <span class="sched-count-pill">${teams.length} đội</span>
                 </div>
                 <div class="sched-rr-controls">
                     <label class="sched-rr-check">
                         <input type="checkbox" name="doubleRoundRobin" ${config.doubleRoundRobin ? 'checked' : ''}>
-                        <span>2 lượt (Đi &amp; Về)</span>
+                        <span>2 lượt</span>
                     </label>
-                    <button type="submit" class="btn btn-amber sched-rr-btn">Sinh lịch vòng tròn</button>
+                    <button type="submit" class="btn btn-amber sched-rr-btn">Tạo lịch thi đấu</button>
                 </div>
             </form>
 
             <div class="card card-pad sched-add-card">
                 <div class="sched-card-head">
-                    <h3 class="sched-card-title">Thêm Trận Playoff / Tùy Chỉnh</h3>
+                    <h3 class="sched-card-title">Tạo trận đấu tùy chỉnh</h3>
                 </div>
                 <form id="admin-add-match-form" class="sched-add-form">
                     <div class="sched-add-row-1">
                         <div class="sched-field">
-                            <label class="form-label" for="sched-round-name">Tên vòng / Trận</label>
+                            <label class="form-label" for="sched-round-name">Trận đấu</label>
                             <input id="sched-round-name" name="round_name" class="form-input" required value="Chung kết" placeholder="VD: Bán kết 1, Chung kết">
                         </div>
                         <div class="sched-field">
                             <label class="form-label" for="sched-stage">Giai đoạn</label>
                             <select id="sched-stage" name="stage" class="form-select">
-                                <option value="playoff">Playoff / CK</option>
+                                <option value="playoff">Chung kết</option>
                                 <option value="round_robin">Vòng tròn</option>
                             </select>
                         </div>
                         <div class="sched-field">
-                            <label class="form-label" for="sched-team-a">Đội A</label>
+                            <label class="form-label" for="sched-team-a">Đội 1</label>
                             <select id="sched-team-a" name="team_a_id" class="form-select" required>${teamAOptions}</select>
                         </div>
                         <div class="sched-field">
-                            <label class="form-label" for="sched-team-b">Đội B</label>
+                            <label class="form-label" for="sched-team-b">Đội 2</label>
                             <select id="sched-team-b" name="team_b_id" class="form-select" required>${teamBOptions}</select>
                         </div>
                     </div>
@@ -800,75 +800,93 @@ function renderSettingsSubtab(state, storeMode) {
         <div class="settings-grid">
             <form id="admin-settings-form" class="card card-pad settings-card">
                 <div class="settings-card-head">
-                    <h3 class="settings-card-title">Thông Tin &amp; Luật Điểm</h3>
-                    <span class="settings-pill">PPA Style</span>
+                    <h3 class="settings-card-title">Thiết Lập Giải Đấu</h3>
+                    <span class="settings-pill">PPA Tour · 0-0-2</span>
                 </div>
 
                 <div class="settings-form-body">
-                    <div class="settings-field">
-                        <label class="form-label" for="set-t-name">Tên giải đấu</label>
-                        <input id="set-t-name" name="name" class="form-input" required value="${escapeHtml(t.name)}">
-                    </div>
-
-                    <div class="settings-field">
-                        <label class="form-label" for="set-t-subtitle">Mô tả / Địa điểm / Ngày</label>
-                        <input id="set-t-subtitle" name="subtitle" class="form-input" value="${escapeHtml(t.subtitle)}">
-                    </div>
-
-                    <div class="settings-row-2">
+                    <div class="settings-section">
+                        <div class="settings-section-title">Thông tin cơ bản</div>
                         <div class="settings-field">
-                            <label class="form-label" for="set-t-status">Trạng thái giải</label>
-                            <select id="set-t-status" name="status" class="form-select">
-                                <option value="upcoming" ${t.status === 'upcoming' ? 'selected' : ''}>Sắp diễn ra</option>
-                                <option value="live" ${t.status === 'live' ? 'selected' : ''}>Đang diễn ra</option>
-                                <option value="completed" ${t.status === 'completed' ? 'selected' : ''}>Đã kết thúc</option>
-                            </select>
+                            <label class="form-label" for="set-t-name">Tên giải đấu</label>
+                            <input id="set-t-name" name="name" class="form-input" required value="${escapeHtml(t.name)}">
                         </div>
-                        <div class="settings-field">
-                            <label class="form-label" for="set-t-bestof">Thể thức Set</label>
-                            <select id="set-t-bestof" name="bestOf" class="form-select">
-                                <option value="1" ${config.bestOf === 1 ? 'selected' : ''}>Bo1 (1 Set)</option>
-                                <option value="3" ${config.bestOf === 3 ? 'selected' : ''}>Bo3 (2/3 Set)</option>
-                                <option value="5" ${config.bestOf === 5 ? 'selected' : ''}>Bo5 (3/5 Set)</option>
-                            </select>
+                        <div class="settings-row-2">
+                            <div class="settings-field">
+                                <label class="form-label" for="set-t-subtitle">Mô tả</label>
+                                <input id="set-t-subtitle" name="subtitle" class="form-input" value="${escapeHtml(t.subtitle)}">
+                            </div>
+                            <div class="settings-field">
+                                <label class="form-label" for="set-t-status">Trạng thái giải</label>
+                                <select id="set-t-status" name="status" class="form-select">
+                                    <option value="upcoming" ${t.status === 'upcoming' ? 'selected' : ''}>Sắp diễn ra</option>
+                                    <option value="live" ${t.status === 'live' ? 'selected' : ''}>Đang diễn ra</option>
+                                    <option value="completed" ${t.status === 'completed' ? 'selected' : ''}>Đã kết thúc</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="settings-row-2">
-                        <div class="settings-field">
-                            <label class="form-label" for="set-t-pts">Điểm kết thúc Set</label>
-                            <input id="set-t-pts" name="pointsPerSet" type="number" min="1" max="50" class="form-input" value="${config.pointsPerSet}">
+                    <div class="settings-section">
+                        <div class="settings-section-title">Thể thức &amp; Luật điểm (toàn giải)</div>
+                        <div class="settings-row-3">
+                            <div class="settings-field">
+                                <label class="form-label" for="set-t-bestof">Thể thức Set</label>
+                                <select id="set-t-bestof" name="bestOf" class="form-select">
+                                    <option value="1" ${config.bestOf === 1 ? 'selected' : ''}>Bo1</option>
+                                    <option value="3" ${config.bestOf === 3 ? 'selected' : ''}>Bo3</option>
+                                    <option value="5" ${config.bestOf === 5 ? 'selected' : ''}>Bo5</option>
+                                </select>
+                            </div>
+                            <div class="settings-field">
+                                <label class="form-label" for="set-t-pts">Điểm/Set</label>
+                                <input id="set-t-pts" name="pointsPerSet" type="number" min="1" max="50" class="form-input" value="${config.pointsPerSet}">
+                            </div>
+                            <div class="settings-field">
+                                <label class="form-label" for="set-t-cap">Điểm trần (0 = mở)</label>
+                                <input id="set-t-cap" name="pointCap" type="number" min="0" max="60" class="form-input" value="${config.pointCap}">
+                            </div>
                         </div>
+
+                        <label class="settings-check-row">
+                            <input type="checkbox" name="winByTwo" ${config.winByTwo ? 'checked' : ''}>
+                            <span>Thắng cách biệt 2 điểm (Win by 2)</span>
+                        </label>
+
                         <div class="settings-field">
-                            <label class="form-label" for="set-t-cap">Điểm trần (0 = mở)</label>
-                            <input id="set-t-cap" name="pointCap" type="number" min="0" max="60" class="form-input" value="${config.pointCap}">
+                            <span class="form-label">Tên gọi các Level</span>
+                            <div class="settings-levels-grid">
+                                ${levelInputs}
+                            </div>
                         </div>
                     </div>
 
-                    <label class="settings-check-row">
-                        <input type="checkbox" name="winByTwo" ${config.winByTwo ? 'checked' : ''}>
-                        <span>Thắng cách biệt 2 điểm (Win by 2)</span>
-                    </label>
-
-                    <div class="settings-field">
-                        <label class="form-label" for="set-t-awards-vis">Hiển thị Vinh Danh &amp; Point</label>
-                        <select id="set-t-awards-vis" class="form-select" name="awardsVisibility">
-                            <option value="public" ${config.awardsVisibility === 'public' ? 'selected' : ''}>👁 Công khai (hiện tên thật VĐV)</option>
-                            <option value="anonymous" ${config.awardsVisibility === 'anonymous' ? 'selected' : ''}>🕶 Ẩn danh (mã ngẫu nhiên mỗi lượt xem)</option>
-                            <option value="hidden" ${config.awardsVisibility === 'hidden' ? 'selected' : ''}>🔒 Chỉ Admin xem tab Vinh Danh</option>
-                        </select>
-                    </div>
-
-                    <div class="settings-field">
-                        <span class="form-label">Tên gọi các Level</span>
-                        <div class="settings-levels-grid">
-                            ${levelInputs}
+                    <div class="settings-section">
+                        <div class="settings-section-title">Thống kê &amp; Vinh danh</div>
+                        <div class="settings-row-2">
+                            <div class="settings-field">
+                                <label class="form-label" for="set-t-awards-vis">Chế độ hiển thị</label>
+                                <select id="set-t-awards-vis" class="form-select" name="awardsVisibility">
+                                    <option value="public" ${config.awardsVisibility === 'public' ? 'selected' : ''}>Công khai</option>
+                                    <option value="anonymous" ${config.awardsVisibility === 'anonymous' ? 'selected' : ''}>Ẩn danh</option>
+                                    <option value="hidden" ${config.awardsVisibility === 'hidden' ? 'selected' : ''}>Chỉ Admin xem</option>
+                                </select>
+                            </div>
+                            <div class="settings-field">
+                                <label class="form-label" for="set-t-awards-limit">Top hiển thị 3 giải tinh thần</label>
+                                <select id="set-t-awards-limit" class="form-select" name="awardsTopLimit">
+                                    <option value="3" ${config.awardsTopLimit === 3 ? 'selected' : ''}>Top 3</option>
+                                    <option value="5" ${config.awardsTopLimit === 5 ? 'selected' : ''}>Top 5 (Mặc định)</option>
+                                    <option value="10" ${config.awardsTopLimit === 10 ? 'selected' : ''}>Top 10</option>
+                                    <option value="0" ${config.awardsTopLimit === 0 ? 'selected' : ''}>Hiển thị tất cả</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 <div class="settings-card-foot">
-                    <button type="submit" class="btn btn-primary settings-save-btn">Lưu cài đặt</button>
+                    <button type="submit" class="btn btn-primary settings-save-btn">Lưu thiết lập</button>
                 </div>
             </form>
 
@@ -881,16 +899,17 @@ function renderSettingsSubtab(state, storeMode) {
                 </div>
 
                 <div class="settings-backup-actions">
-                    <button type="button" class="btn btn-secondary settings-action-btn" data-action="export-json">⬇ Tải sao lưu JSON</button>
-
-                    <label class="btn btn-secondary settings-action-btn">
-                        ⬆ Nhập từ file JSON
-                        <input type="file" accept=".json,application/json" id="admin-import-json-input" class="hidden">
-                    </label>
+                    <div class="settings-backup-pair">
+                        <button type="button" class="btn btn-secondary settings-action-btn" data-action="export-json">Tải sao lưu JSON</button>
+                        <label class="btn btn-secondary settings-action-btn">
+                            Nhập từ JSON
+                            <input type="file" accept=".json,application/json" id="admin-import-json-input" class="hidden">
+                        </label>
+                    </div>
 
                     <hr class="settings-divider">
 
-                    <button type="button" class="btn btn-danger settings-action-btn" data-action="reset-demo">↺ Khôi phục dữ liệu mẫu (6×3)</button>
+                    <button type="button" class="btn btn-danger settings-action-btn" data-action="reset-demo">Khôi phục dữ liệu mẫu (6×3)</button>
                 </div>
 
                 <details class="settings-help-details">
@@ -972,7 +991,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                         <button type="button" class="btn btn-primary btn-sm" data-action="refresh-registrations">↻ Kiểm tra lại</button>
                     </div>
                 </div>
-                <p style="margin:0 0 8px;">Chạy đoạn SQL sau 1 lần trong <strong>Supabase Dashboard → SQL Editor</strong> để VĐV gửi form được và chỉ Admin mới xem được danh sách:</p>
+                <p style="margin:0 0 8px;">Chạy đoạn SQL sau 1 lần trong <strong>Supabase Dashboard → SQL Editor</strong> để người chơi gửi form được và chỉ Admin mới xem được danh sách:</p>
                 <pre class="sql-snippet">${escapeHtml(REGISTRATION_TABLE_SQL)}</pre>
             </div>
         `
@@ -985,7 +1004,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                 <strong class="reg-skill-count tabular">${s.count}</strong>
             </div>
         `).join('')
-        : '<span class="section-sub">Chưa có VĐV đăng ký nào.</span>';
+        : '<span class="section-sub">Chưa có người chơi đăng ký nào.</span>';
 
     const skillOptionsHtml = SKILL_LEVEL_OPTIONS.map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join('');
 
@@ -999,7 +1018,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
 
         const statusCellHtml = st === 'approved'
             ? `<span class="tag reg-status-pill-row is-approved">✓ Đã duyệt</span>`
-            : `<button type="button" class="tag reg-status-btn is-pending" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="approved" title="Bấm để duyệt VĐV này vào danh sách chính">Chờ duyệt</button>`;
+            : `<button type="button" class="tag reg-status-btn is-pending" data-action="toggle-reg-status" data-reg-id="${escapeHtml(r.id)}" data-next-status="approved" title="Bấm để duyệt người chơi này vào danh sách chính">Chờ duyệt</button>`;
 
         return `
             <tr class="reg-row">
@@ -1016,7 +1035,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                 <td class="reg-col-status">${statusCellHtml}</td>
                 <td class="reg-col-actions">
                     <div class="reg-row-actions">
-                        <button type="button" class="btn btn-secondary btn-sm reg-edit-btn" data-action="edit-registration" data-reg-id="${escapeHtml(r.id)}" title="Chỉnh sửa thông tin & hạng VĐV" aria-label="Chỉnh sửa">Sửa</button>
+                        <button type="button" class="btn btn-secondary btn-sm reg-edit-btn" data-action="edit-registration" data-reg-id="${escapeHtml(r.id)}" title="Chỉnh sửa thông tin & hạng người chơi" aria-label="Chỉnh sửa">Sửa</button>
                         <button type="button" class="btn btn-danger btn-sm reg-del-btn" data-action="delete-registration" data-reg-id="${escapeHtml(r.id)}" title="Xóa phiếu này" aria-label="Xóa phiếu này">Xóa</button>
                     </div>
                 </td>
@@ -1074,7 +1093,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                 <div class="reg-toolbar-filters">
                     <div class="search-input-wrap reg-search-wrap">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                        <input id="admin-reg-search" type="search" class="search-input" data-action="reg-filter-query" value="${escapeHtml(adminState.regQuery || '')}" placeholder="Tìm VĐV, level...">
+                        <input id="admin-reg-search" type="search" class="search-input" data-action="reg-filter-query" value="${escapeHtml(adminState.regQuery || '')}" placeholder="Tìm người chơi, level...">
                     </div>
                     <select class="select-clean reg-status-select" data-action="reg-filter-status" aria-label="Lọc trạng thái đơn">
                         <option value="all" ${regStatusFilter === 'all' ? 'selected' : ''}>Tất cả (${summary.total})</option>
@@ -1090,7 +1109,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
             </div>
 
             <details class="reg-manual-details">
-                <summary>+ Thêm VĐV thủ công</summary>
+                <summary>+ Thêm người chơi thủ công</summary>
                 <form id="admin-add-registration-form" class="reg-manual-form">
                     <div>
                         <label class="form-label">Họ và tên *</label>
@@ -1127,7 +1146,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                             </tr>
                         </thead>
                         <tbody>
-                            ${rowsHtml || '<tr><td colspan="7" style="padding:26px;color:var(--muted);">Chưa có VĐV nào đăng ký hoặc không khớp bộ lọc.</td></tr>'}
+                            ${rowsHtml || '<tr><td colspan="7" style="padding:26px;color:var(--muted);">Chưa có người chơi nào đăng ký hoặc không khớp bộ lọc.</td></tr>'}
                         </tbody>
                     </table>
                 </div>
@@ -1162,10 +1181,10 @@ export function renderAdminTab(state, adminState, storeMode) {
             <div class="admin-subnav">
                 <div class="admin-subtabs" role="tablist">
                     <button type="button" class="admin-subtab ${subtab === 'scores' ? 'active' : ''}" data-action="admin-subtab" data-subtab="scores">Cập Nhật Tỉ Số</button>
-                    <button type="button" class="admin-subtab ${subtab === 'registrations' ? 'active' : ''}" data-action="admin-subtab" data-subtab="registrations">Đăng Ký VĐV${regCount > 0 ? ` (${regCount})` : ''}</button>
-                    <button type="button" class="admin-subtab ${subtab === 'teams' ? 'active' : ''}" data-action="admin-subtab" data-subtab="teams">Đội & Số Đội</button>
+                    <button type="button" class="admin-subtab ${subtab === 'registrations' ? 'active' : ''}" data-action="admin-subtab" data-subtab="registrations">Đăng Ký${regCount > 0 ? ` (${regCount})` : ''}</button>
+                    <button type="button" class="admin-subtab ${subtab === 'teams' ? 'active' : ''}" data-action="admin-subtab" data-subtab="teams">Thiết Lập Đội</button>
                     <button type="button" class="admin-subtab ${subtab === 'schedule' ? 'active' : ''}" data-action="admin-subtab" data-subtab="schedule">Lịch Thi Đấu</button>
-                    <button type="button" class="admin-subtab ${subtab === 'settings' ? 'active' : ''}" data-action="admin-subtab" data-subtab="settings">Cài Đặt & Backup</button>
+                    <button type="button" class="admin-subtab ${subtab === 'settings' ? 'active' : ''}" data-action="admin-subtab" data-subtab="settings">Thiết Lập Chung</button>
                 </div>
                 <div class="admin-subnav-actions">
                     <span id="admin-save-status" style="font-size:12.5px;color:var(--emerald);font-weight:750;">Sẵn sàng</span>

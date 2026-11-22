@@ -8,7 +8,7 @@ export function createInitialDemoState(tournamentId = 'main') {
     const tournament = {
         id: tournamentId,
         name: 'VaciF PickleBeer 2026 Team League',
-        subtitle: 'Giải đồng đội VACIF • Đội hình cố định (Fixed Lineup) • Tỉ số từng Set',
+        subtitle: 'Giải PickleBall nội bộ VACIF • Vợt cầm chắc, bia rót đầy — thắng thì gáy, thua thì dzô!',
         status: 'live',
         config: {
             ...DEFAULT_CONFIG,

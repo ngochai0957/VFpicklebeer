@@ -69,7 +69,7 @@ class LocalStore {
             const normalized = normalizeState(JSON.parse(raw), this.tournamentId);
             if (normalized.tournament.name === 'Giải Pickleball Team League 2026' || normalized.tournament.name === 'VACIF PickleBeer Team League 2026') {
                 normalized.tournament.name = 'VaciF PickleBeer 2026 Team League';
-                normalized.tournament.subtitle = 'Giải đồng đội VACIF • Đội hình cố định (Fixed Lineup) • Tỉ số từng Set';
+                normalized.tournament.subtitle = 'Giải đồng đội VACIF • Đội hình cố định';
             }
             return normalized;
         } catch {
