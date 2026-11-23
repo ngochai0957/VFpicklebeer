@@ -231,6 +231,27 @@ test('Public UI renders cleanly with zero admin edit controls and escapes unsafe
     assert.ok(standingsHtml.includes('&lt;script&gt;xss&lt;/script&gt;'));
     assert.ok(liveHtml.includes('Đang Thi Đấu Trực Tiếp'));
     assert.ok(matchesHtml.includes('Vòng 1'));
+
+    // Playoff matches show inside Lịch Thi Đấu without duplicating on Tổng Quan (standings)
+    const appJsSrc = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
+    assert.equal(appJsSrc.includes("appState.activeTab === 'standings') tabHtml = renderPlayoffSection"), false);
+    state.teamMatches.push({
+        id: 'tm_final',
+        tournament_id: 'main',
+        round_number: 99,
+        round_name: 'Chung kết',
+        stage: 'playoff',
+        team_a_id: state.teams[0].id,
+        team_b_id: state.teams[1].id,
+        court: 'Sân Trung Tâm',
+        scheduled_time: '2026-11-04 16:00',
+        status: 'upcoming',
+        sort_order: 99,
+        note: ''
+    });
+    const matchesWithPlayoff = renderMatchesTab(state, { status: 'all', round: 'all', teamId: 'all' }, false);
+    assert.ok(matchesWithPlayoff.includes('Chung kết'));
+    assert.ok(matchesWithPlayoff.includes('Sân Trung Tâm'));
 });
 
 test('Admin UI renders all 4 subtabs and clean password-only login modal', () => {
@@ -278,9 +299,24 @@ test('Admin UI renders all 4 subtabs and clean password-only login modal', () =>
         scoreSubs[2].format_override = null;
     }
     const scoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: scoresMatch.id }, 'supabase');
-    assert.ok(scoresHtml.includes('scorer-sub-card status-live lv-1'));
-    assert.ok(scoresHtml.includes('scorer-sub-card status-ready lv-2'));
-    assert.ok(scoresHtml.includes('scorer-sub-card status-upcoming lv-3'));
+    assert.ok(scoresHtml.includes('scorer-sub-card status-live lv-1 is-collapsed'));
+    assert.ok(scoresHtml.includes('scorer-sub-card status-ready lv-2 is-collapsed'));
+    assert.ok(scoresHtml.includes('scorer-sub-card status-upcoming lv-3 is-collapsed'));
+    assert.ok(scoresHtml.includes('class="scorer-sub-details hidden"'));
+    assert.ok(scoresHtml.includes('class="scorer-sub-toggle-space"'));
+    assert.ok(scoresHtml.includes('aria-expanded="false"'));
+    assert.equal(scoresHtml.includes('is-expanded'), false);
+    if (scoreSubs.length >= 1) {
+        const expandedHtml = renderAdminTab(state, {
+            subtab: 'scores',
+            selectedMatchId: scoresMatch.id,
+            expandedSubs: { [scoreSubs[0].id]: true }
+        }, 'supabase');
+        assert.ok(expandedHtml.includes('scorer-sub-card status-live lv-1 is-expanded'));
+        assert.ok(expandedHtml.includes(`data-sub-details="${scoreSubs[0].id}"`));
+        assert.ok(expandedHtml.includes(`<div class="scorer-sub-details" data-sub-details="${scoreSubs[0].id}">`));
+        assert.ok(expandedHtml.includes('aria-expanded="true"'));
+    }
     assert.ok(scoresHtml.includes('set-editor-block set-state-completed'));
     assert.ok(scoresHtml.includes('set-editor-block set-state-live'));
     assert.ok(scoresHtml.includes('set-editor-block set-state-waiting'));
@@ -1074,6 +1110,10 @@ test('persistent per-set rally history log, analytics summary, and play-by-play 
 
     const modalHtml = renderSubMatchHistoryModal(sm.id, state, { setIdx: 0, filter: 'all', sortDesc: false });
     assert.ok(modalHtml.includes('Chi Tiết Diễn Biến Từng Lượt'));
+    assert.equal(modalHtml.split('class="history-hero-players"').length - 1, 2);
+    assert.equal(modalHtml.split('class="history-player-line"').length - 1, 4);
+    assert.ok(modalHtml.includes('history-hero-center'));
+    assert.ok(modalHtml.includes('history-hero-score'));
     assert.ok(modalHtml.includes('history-svg'));
     assert.ok(modalHtml.includes('⇄ Đổi giao'));
     assert.ok(modalHtml.includes('0-0-2'));

@@ -35,7 +35,6 @@ import {
     renderAwardsVisibilityBar,
     renderLiveSpotlight,
     renderMatchesTab,
-    renderPlayoffSection,
     renderRegisterPage,
     renderRulesTab,
     renderStandingsTab,
@@ -118,6 +117,7 @@ const appState = {
     adminState: {
         subtab: initialRoute.adminSubtab,
         selectedMatchId: null,
+        expandedSubs: {},
         rallyBySet: {},
         rallyUndoBySet: {},
         registrations: [],
@@ -564,6 +564,7 @@ function renderMainContent() {
     const mainEl = document.getElementById('main-root');
     if (!mainEl) return;
 
+    mainEl.classList.remove('hidden');
     document.body.classList.toggle('tv-mode', appState.tvMode);
 
     if (appState.loading) {
@@ -610,7 +611,7 @@ function renderMainContent() {
         : '';
 
     let tabHtml = '';
-    if (appState.activeTab === 'standings') tabHtml = renderPlayoffSection(state, appState.isAdmin);
+    if (appState.activeTab === 'standings') tabHtml = '';
     else if (appState.activeTab === 'matches') tabHtml = renderMatchesTab(state, appState.filters, appState.isAdmin);
     else if (appState.activeTab === 'teams') tabHtml = renderTeamsTab(state, appState.teamsQuery);
     else if (appState.activeTab === 'awards') {
@@ -618,7 +619,9 @@ function renderMainContent() {
     }
     else if (appState.activeTab === 'rules') tabHtml = renderRulesTab(state);
 
-    mainEl.innerHTML = `${liveBanner}${tabHtml}`;
+    const contentHtml = `${liveBanner}${tabHtml}`;
+    mainEl.classList.toggle('hidden', !contentHtml.trim());
+    mainEl.innerHTML = contentHtml;
 }
 
 function renderModal() {
@@ -1557,6 +1560,19 @@ async function handleAction(action, el, event) {
         return;
     }
 
+    if (action === 'toggle-sub-details') {
+        if (!appState.isAdmin) return;
+        const subId = el.dataset.subId;
+        if (!subId) return;
+        const nextExpanded = !appState.adminState.expandedSubs?.[subId];
+        appState.adminState.expandedSubs = {
+            ...(appState.adminState.expandedSubs || {}),
+            [subId]: nextExpanded
+        };
+        renderMainContent();
+        return;
+    }
+
     if (action === 'toggle-sched-edit') {
         const matchId = el.dataset.matchId;
         const panel = document.querySelector(`[data-sched-edit-panel="${CSS.escape(matchId)}"]`);
@@ -2111,6 +2127,12 @@ document.addEventListener('keydown', (event) => {
         }
         appState.modal = null;
         renderModal();
+        return;
+    }
+    const roleBtn = event.target?.closest?.('[role="button"][data-action]');
+    if (roleBtn && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault();
+        handleAction(roleBtn.dataset.action, roleBtn, event);
     }
 });
 

@@ -1551,8 +1551,19 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
     const levelName = config.levelNames[sm.level_index - 1] || `Level ${sm.level_index}`;
     const pairACode = pairA?.pair_label || `${teamA?.code || 'A'}${sm.level_index}`;
     const pairBCode = pairB?.pair_label || `${teamB?.code || 'B'}${sm.level_index}`;
-    const pairANames = pairA ? `${pairA.player_1 || ''}${pairA.player_2 ? ` / ${pairA.player_2}` : ''}`.trim() : pairACode;
-    const pairBNames = pairB ? `${pairB.player_1 || ''}${pairB.player_2 ? ` / ${pairB.player_2}` : ''}`.trim() : pairBCode;
+    const renderPairLines = (pair, fallbackCode) => {
+        const p1 = String(pair?.player_1 || '').trim();
+        const p2 = String(pair?.player_2 || '').trim();
+        if (!p1 && !p2) {
+            return `<strong class="history-player-line">${escapeHtml(fallbackCode)}</strong>`;
+        }
+        return [
+            p1 ? `<strong class="history-player-line">${escapeHtml(p1)}</strong>` : '',
+            p2 ? `<strong class="history-player-line">${escapeHtml(p2)}</strong>` : ''
+        ].filter(Boolean).join('');
+    };
+    const pairALinesHtml = renderPairLines(pairA, pairACode);
+    const pairBLinesHtml = renderPairLines(pairB, pairBCode);
     const colorA = teamA?.color || '#2563EB';
     const colorB = teamB?.color || '#E05328';
 
@@ -1630,14 +1641,14 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
 
         if (e.outcome === 'server-ace') {
             badgeTxt = 'Ace +1';
-            actionDesc = `${sName} phát ăn điểm trực tiếp (+1 công)`;
+            actionDesc = `${sName} phát ăn điểm trực tiếp`;
         } else if (e.outcome === 'server-attack' || e.outcome === 'partner-attack') {
             badgeTxt = '+1 Tấn công';
-            actionDesc = `${aName} tấn công chính xác (+1 công)`;
+            actionDesc = `${aName} tấn công chính xác`;
         } else if (e.outcome === 'recv1-defense' || e.outcome === 'recv2-defense' || e.outcome === 'receiver-win') {
             badgeCls = 'is-recv';
             badgeTxt = '+1 Phòng thủ';
-            actionDesc = `${e.aSlot ? aName : rName} phòng thủ thành công (+1 thủ)`;
+            actionDesc = `${e.aSlot ? aName : rName} phòng thủ thành công`;
             shiftHtml = shiftTag;
         } else if (e.outcome === 'serve-fault') {
             badgeCls = 'is-fault';
@@ -1688,12 +1699,14 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
     }).join('');
 
     const winLabel = activeSetEval.winner === 'A'
-        ? `<span class="tag tag-status-completed">🏆 ${escapeHtml(pairACode)} thắng Set ${curSetIdx + 1}</span>`
+        ? `<span class="history-win-pill">🏆 ${escapeHtml(pairACode)} thắng</span>`
         : (activeSetEval.winner === 'B'
-            ? `<span class="tag tag-status-completed">🏆 ${escapeHtml(pairBCode)} thắng Set ${curSetIdx + 1}</span>`
-            : `<span class="tag tag-round">Set ${curSetIdx + 1}</span>`);
+            ? `<span class="history-win-pill">🏆 ${escapeHtml(pairBCode)} thắng</span>`
+            : '');
 
     const subHeaderMeta = [tm?.round_name, levelName, tm?.court].filter(Boolean).join(' · ');
+    const isRowAWin = activeSetEval.winner === 'A';
+    const isRowBWin = activeSetEval.winner === 'B';
 
     const backToMatchBtn = options.returnToMatchId
         ? `<button type="button" class="history-back-btn" data-action="view-match-detail" data-match-id="${escapeHtml(options.returnToMatchId)}">&larr; Quay lại trận đấu</button>`
@@ -1716,17 +1729,25 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
                     </div>
 
                     <div class="history-hero-card">
-                        <div class="history-hero-side">
-                            <span class="history-hero-code" style="color:${escapeHtml(colorA)}">${escapeHtml(pairACode)}</span>
-                            <strong class="history-hero-names">${escapeHtml(pairANames)}</strong>
+                        <div class="history-hero-side ${isRowAWin ? 'is-winner' : (isRowBWin ? 'is-loser' : '')}">
+                            <span class="history-hero-code" style="background:${escapeHtml(colorA)}">${escapeHtml(pairACode)}</span>
+                            <div class="history-hero-players">
+                                ${pairALinesHtml}
+                            </div>
                         </div>
                         <div class="history-hero-center">
-                            <div class="history-hero-score tabular">${Number(activeSetScore.a) || 0} : ${Number(activeSetScore.b) || 0}</div>
+                            <div class="history-hero-score tabular">
+                                <span class="${isRowAWin ? 'is-winner' : ''}">${Number(activeSetScore.a) || 0}</span>
+                                <span class="history-hero-sep">:</span>
+                                <span class="${isRowBWin ? 'is-winner' : ''}">${Number(activeSetScore.b) || 0}</span>
+                            </div>
                             ${winLabel}
                         </div>
-                        <div class="history-hero-side right">
-                            <span class="history-hero-code" style="color:${escapeHtml(colorB)}">${escapeHtml(pairBCode)}</span>
-                            <strong class="history-hero-names">${escapeHtml(pairBNames)}</strong>
+                        <div class="history-hero-side right ${isRowBWin ? 'is-winner' : (isRowAWin ? 'is-loser' : '')}">
+                            <span class="history-hero-code" style="background:${escapeHtml(colorB)}">${escapeHtml(pairBCode)}</span>
+                            <div class="history-hero-players">
+                                ${pairBLinesHtml}
+                            </div>
                         </div>
                     </div>
 

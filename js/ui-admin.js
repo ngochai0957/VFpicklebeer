@@ -400,9 +400,16 @@ function renderScoreOperatorSubtab(state, adminState) {
         const centerMatchupBadge = hasStartedSub
             ? `<span class="scorer-vs-badge has-score tabular">${ev.setsWonA} - ${ev.setsWonB}</span>`
             : '<span class="scorer-vs-badge">VS</span>';
+        const isExpanded = Boolean(adminState?.expandedSubs?.[sm.id]);
+        const subStatusText = subStatus === 'live'
+            ? 'Đang đấu'
+            : (subStatus === 'ready' ? 'Sắp đấu' : (subStatus === 'completed' ? 'Hoàn thành' : 'Chưa đấu'));
+        const toggleTitle = isExpanded
+            ? 'Thu gọn chi tiết từng set và thông tin phía dưới'
+            : 'Mở chi tiết từng set và thông tin phía dưới';
 
         return `
-            <div class="scorer-sub-card status-${escapeHtml(subStatus)} lv-${lvlTier}">
+            <div class="scorer-sub-card status-${escapeHtml(subStatus)} lv-${lvlTier} ${isExpanded ? 'is-expanded' : 'is-collapsed'}">
                 <div class="scorer-sub-toprow">
                     <div class="scorer-sub-idgroup">
                         <span class="scorer-num-badge ${hasCustomOrder ? 'is-custom' : ''}">#${idx + 1}</span>
@@ -412,9 +419,28 @@ function renderScoreOperatorSubtab(state, adminState) {
                         </div>
                         <span class="level-pill lv-${lvlTier}">${escapeHtml(levelName)}</span>
                     </div>
+                    <button
+                        type="button"
+                        class="scorer-sub-toggle-space"
+                        data-action="toggle-sub-details"
+                        data-sub-id="${escapeHtml(sm.id)}"
+                        aria-expanded="${isExpanded ? 'true' : 'false'}"
+                        title="${toggleTitle}"
+                    >
+                        <span class="scorer-sub-mini-status status-${escapeHtml(subStatus)}">${subStatusText}</span>
+                        <span class="scorer-sub-chevron" aria-hidden="true">${isExpanded ? '▴' : '▾'}</span>
+                    </button>
                 </div>
 
-                <div class="scorer-sub-matchup">
+                <div
+                    class="scorer-sub-matchup"
+                    data-action="toggle-sub-details"
+                    data-sub-id="${escapeHtml(sm.id)}"
+                    role="button"
+                    tabindex="0"
+                    aria-expanded="${isExpanded ? 'true' : 'false'}"
+                    title="${toggleTitle}"
+                >
                     <div class="scorer-pair-chip side-a">
                         <span class="scorer-pair-code" style="background:${escapeHtml(teamA?.color || '#2563EB')}">${escapeHtml(pairACode)}</span>
                         <div class="scorer-pair-names">
@@ -430,29 +456,31 @@ function renderScoreOperatorSubtab(state, adminState) {
                     </div>
                 </div>
 
-                <div class="scorer-sub-toolbar">
-                    <div class="scorer-sub-status-row">
-                        <button type="button" class="quick-chip upcoming ${subStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming">Chưa đấu</button>
-                        <button type="button" class="quick-chip ready ${subStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready">Sắp đấu</button>
-                        <button type="button" class="quick-chip live ${subStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">Đang đấu</button>
-                        <button type="button" class="quick-chip completed ${subStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">Hoàn thành</button>
-                    </div>
-                    <div class="scorer-sub-settings-grid">
-                        <div>
-                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Sân riêng</label>
-                            <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="court" value="${escapeHtml(ovCourt)}" placeholder="Theo trận (${escapeHtml(match.court || 'Sân 1')})">
+                <div class="scorer-sub-details${isExpanded ? '' : ' hidden'}" data-sub-details="${escapeHtml(sm.id)}">
+                    <div class="scorer-sub-toolbar">
+                        <div class="scorer-sub-status-row">
+                            <button type="button" class="quick-chip upcoming ${subStatus === 'upcoming' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="upcoming">Chưa đấu</button>
+                            <button type="button" class="quick-chip ready ${subStatus === 'ready' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="ready">Sắp đấu</button>
+                            <button type="button" class="quick-chip live ${subStatus === 'live' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="live">Đang đấu</button>
+                            <button type="button" class="quick-chip completed ${subStatus === 'completed' ? 'active' : ''}" data-action="quick-sub-status" data-sub-id="${escapeHtml(sm.id)}" data-status="completed">Hoàn thành</button>
                         </div>
-                        <div>
-                            <label class="form-label" style="font-size:11px;margin-bottom:3px;">Giờ riêng</label>
-                            <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="scheduledTime" value="${escapeHtml(ovTime)}" placeholder="${escapeHtml(tmSchedForPlaceholder.time || '08:30')}">
+                        <div class="scorer-sub-settings-grid">
+                            <div>
+                                <label class="form-label" style="font-size:11px;margin-bottom:3px;">Sân riêng</label>
+                                <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="court" value="${escapeHtml(ovCourt)}" placeholder="Theo trận (${escapeHtml(match.court || 'Sân 1')})">
+                            </div>
+                            <div>
+                                <label class="form-label" style="font-size:11px;margin-bottom:3px;">Giờ riêng</label>
+                                <input type="text" class="form-input" style="padding:6px 10px;font-size:12.5px;" data-action="sub-override-field" data-sub-id="${escapeHtml(sm.id)}" data-field="scheduledTime" value="${escapeHtml(ovTime)}" placeholder="${escapeHtml(tmSchedForPlaceholder.time || '08:30')}">
+                            </div>
                         </div>
                     </div>
-                </div>
 
-                ${setsRowsHtml}
+                    ${setsRowsHtml}
 
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
-                    <button type="button" class="btn btn-secondary btn-sm" data-action="add-set" data-sub-id="${escapeHtml(sm.id)}">+ Thêm Set</button>
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;flex-wrap:wrap;">
+                        <button type="button" class="btn btn-secondary btn-sm" data-action="add-set" data-sub-id="${escapeHtml(sm.id)}">+ Thêm Set</button>
+                    </div>
                 </div>
             </div>
         `;
