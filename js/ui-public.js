@@ -1852,7 +1852,7 @@ export function renderRegisterPage(tournament, options = {}) {
                     </p>
                     <div class="reg-receipt-box">
                         <div class="reg-receipt-row"><span>Họ và tên</span><strong>${escapeHtml(submittedReceipt.full_name)}</strong></div>
-                        <div class="reg-receipt-row"><span>Tên thi đấu</span><strong>${escapeHtml(submittedReceipt.display_name || submittedReceipt.full_name)}</strong></div>
+                        <div class="reg-receipt-row"><span>Tên thi đấu</span><strong>${escapeHtml(String(submittedReceipt.display_name || '').trim() || submittedReceipt.full_name)}</strong></div>
                         <div class="reg-receipt-row"><span>Trình độ (Tự đánh giá)</span><strong>${escapeHtml(submittedReceipt.skill_level)}</strong></div>
                     </div>
                 </div>
@@ -1880,7 +1880,7 @@ export function renderRegisterPage(tournament, options = {}) {
 
                 <div class="reg-card reg-q-card">
                     <label class="reg-q-label" for="reg-display-name">Tên thi đấu</label>
-                    <input id="reg-display-name" name="display_name" type="text" class="form-input" maxlength="40" placeholder="">
+                    <input id="reg-display-name" name="display_name" type="text" class="form-input" maxlength="40" placeholder="Để trống nếu dùng họ và tên">
                 </div>
 
                 <div class="reg-card reg-q-card">

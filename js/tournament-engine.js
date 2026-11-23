@@ -940,6 +940,16 @@ export function summarizeRegistrations(registrations = []) {
 }
 
 /**
+ * Resolves a registered player's tournament display name:
+ * prefers Tên thi đấu (`display_name`), defaulting to Họ và tên (`full_name`) when blank.
+ */
+export function resolveRegisteredDisplayName(reg) {
+    const nick = String(reg?.display_name || '').trim();
+    if (nick) return nick;
+    return String(reg?.full_name || '').trim();
+}
+
+/**
  * Builds a normalized, deduplicated roster-picker catalog from non-rejected registrations.
  */
 export function buildRegisteredPlayerCatalog(registrations = []) {
@@ -947,7 +957,7 @@ export function buildRegisteredPlayerCatalog(registrations = []) {
 
     const baseCounts = new Map();
     for (const r of active) {
-        const baseName = String(r?.display_name || r?.full_name || '').trim();
+        const baseName = resolveRegisteredDisplayName(r);
         if (!baseName) continue;
         const k = baseName.toLowerCase();
         baseCounts.set(k, (baseCounts.get(k) || 0) + 1);
@@ -957,7 +967,7 @@ export function buildRegisteredPlayerCatalog(registrations = []) {
     const entries = [];
     for (const r of active) {
         const fullName = String(r?.full_name || '').trim();
-        const baseName = String(r?.display_name || fullName || '').trim();
+        const baseName = resolveRegisteredDisplayName(r);
         if (!baseName) continue;
 
         let value = baseName;
@@ -978,8 +988,6 @@ export function buildRegisteredPlayerCatalog(registrations = []) {
         const levelIndex = rank < 10 ? rank + 1 : 99;
         const shortLvl = levelIndex <= 3 ? `Lv${levelIndex}` : '';
         const status = r?.status || 'pending';
-        const hasDifferentFull = Boolean(fullName && fullName.toLowerCase() !== uniqueValue.toLowerCase());
-        const namePart = hasDifferentFull ? `${uniqueValue} (${fullName})` : uniqueValue;
         const suffixParts = [shortLvl, status !== 'approved' ? 'Chờ duyệt' : ''].filter(Boolean);
 
         entries.push({
@@ -987,9 +995,10 @@ export function buildRegisteredPlayerCatalog(registrations = []) {
             value: uniqueValue,
             key: uniqueValue.toLowerCase(),
             fullName,
+            fullKey: fullName.toLowerCase(),
             levelIndex,
             status,
-            label: suffixParts.length > 0 ? `${namePart} · ${suffixParts.join(' · ')}` : namePart
+            label: suffixParts.length > 0 ? `${uniqueValue} · ${suffixParts.join(' · ')}` : uniqueValue
         });
     }
 
@@ -1002,11 +1011,126 @@ export function buildRegisteredPlayerCatalog(registrations = []) {
     });
 }
 
+function buildUniqueFullNameLookup(catalog = []) {
+    const counts = new Map();
+    const firstMatch = new Map();
+    const valueKeys = new Set();
+    for (const entry of catalog || []) {
+        if (entry?.key) valueKeys.add(entry.key);
+        const fk = entry?.fullKey;
+        if (!fk) continue;
+        counts.set(fk, (counts.get(fk) || 0) + 1);
+        if (!firstMatch.has(fk)) firstMatch.set(fk, entry);
+    }
+    const uniqueByFull = new Map();
+    for (const [fk, count] of counts.entries()) {
+        if (count === 1 && !valueKeys.has(fk)) {
+            uniqueByFull.set(fk, firstMatch.get(fk));
+        }
+    }
+    return uniqueByFull;
+}
+
+/**
+ * Resolves a stored pair player string cleanly to the corresponding catalog value (matching key or unique fullName).
+ */
+export function resolveCatalogPlayerValue(catalog = [], currentValue = '') {
+    const curVal = String(currentValue || '').trim();
+    if (!curVal) return '';
+    const curKey = curVal.toLowerCase();
+    const list = Array.isArray(catalog) ? catalog : [];
+    const exactEntry = list.find((p) => p.key === curKey);
+    if (exactEntry) return exactEntry.value;
+    const uniqueFull = buildUniqueFullNameLookup(list).get(curKey);
+    return uniqueFull ? uniqueFull.value : curVal;
+}
+
+/**
+ * Reconciles `teamPairs` player names so slots matching a registration's `full_name` use `Tên thi đấu` (or `full_name` when blank).
+ */
+export function reconcileTeamPairsDisplayNames(teamPairs = [], registrations = []) {
+    const catalog = buildRegisteredPlayerCatalog(registrations);
+    const uniqueByFull = buildUniqueFullNameLookup(catalog);
+    let changed = false;
+    const nextPairs = (teamPairs || []).map((pair) => {
+        const nextPair = { ...pair };
+        for (const field of ['player_1', 'player_2']) {
+            const cur = String(pair?.[field] || '').trim();
+            if (!cur) continue;
+            const curKey = cur.toLowerCase();
+            if (catalog.some((e) => e.key === curKey)) continue;
+            const matched = uniqueByFull.get(curKey);
+            if (matched && matched.value !== cur) {
+                nextPair[field] = matched.value;
+                changed = true;
+            }
+        }
+        return nextPair;
+    });
+    return { teamPairs: nextPairs, changed };
+}
+
+/**
+ * Propagates edits to a single player registration (`Tên thi đấu` or `Họ và tên`) across `teamPairs` throughout the tournament.
+ */
+export function syncTeamPairsWithRegistrationChange(teamPairs = [], prevRegistrations = [], nextRegistrations = [], regId = '') {
+    const prevReg = (prevRegistrations || []).find((r) => r.id === regId);
+    const nextReg = (nextRegistrations || []).find((r) => r.id === regId);
+    if (!prevReg || !nextReg) {
+        return reconcileTeamPairsDisplayNames(teamPairs, nextRegistrations);
+    }
+
+    const prevCatalog = buildRegisteredPlayerCatalog(prevRegistrations);
+    const nextCatalog = buildRegisteredPlayerCatalog(nextRegistrations);
+    const prevEntry = prevCatalog.find((e) => e.id === regId);
+    const nextEntry = nextCatalog.find((e) => e.id === regId);
+    const nextValue = nextEntry?.value || resolveRegisteredDisplayName(nextReg);
+    if (!nextValue) return { teamPairs: [...(teamPairs || [])], changed: false };
+
+    const candidateKeys = new Set();
+    if (prevEntry?.key) candidateKeys.add(prevEntry.key);
+    const oldDisplayKey = resolveRegisteredDisplayName(prevReg).toLowerCase();
+    if (oldDisplayKey) candidateKeys.add(oldDisplayKey);
+
+    const oldFullKey = String(prevReg.full_name || '').trim().toLowerCase();
+    const otherSharesOldFull = oldFullKey && (prevRegistrations || []).some((r) => (
+        r.id !== regId
+        && (r.status || 'pending') !== 'rejected'
+        && (
+            String(r.full_name || '').trim().toLowerCase() === oldFullKey
+            || resolveRegisteredDisplayName(r).toLowerCase() === oldFullKey
+        )
+    ));
+    if (oldFullKey && !otherSharesOldFull) {
+        candidateKeys.add(oldFullKey);
+    }
+
+    let changed = false;
+    const nextPairs = (teamPairs || []).map((pair) => {
+        const nextPair = { ...pair };
+        for (const field of ['player_1', 'player_2']) {
+            const cur = String(pair?.[field] || '').trim();
+            if (!cur) continue;
+            if (candidateKeys.has(cur.toLowerCase()) && cur !== nextValue) {
+                nextPair[field] = nextValue;
+                changed = true;
+            }
+        }
+        return nextPair;
+    });
+
+    if (!changed) {
+        return reconcileTeamPairsDisplayNames(teamPairs, nextRegistrations);
+    }
+    return { teamPairs: nextPairs, changed: true };
+}
+
 /**
  * Builds `<option>` markup for a roster slot matched to its bracket level while excluding players already chosen in other slots.
  */
 export function buildPlayerSelectOptionsHtml(catalog = [], otherAssignedKeys = new Set(), currentValue = '', targetLevel = 1) {
-    const curVal = String(currentValue || '').trim();
+    const resolvedVal = resolveCatalogPlayerValue(catalog, currentValue);
+    const curVal = String(resolvedVal || '').trim();
     const curKey = curVal.toLowerCase();
     const list = Array.isArray(catalog) ? catalog : [];
     const strictLevelMatch = targetLevel >= 1 && targetLevel <= SKILL_LEVEL_OPTIONS.length;

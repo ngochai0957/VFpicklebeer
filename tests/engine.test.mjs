@@ -28,11 +28,14 @@ import {
     normalizeSetPlayerStats,
     normalizeSetRallyLogs,
     parseScheduleValue,
+    reconcileTeamPairsDisplayNames,
+    resolveRegisteredDisplayName,
     resolveSubMatchSchedule,
     sanitizeRegistrationPayload,
     selectRallyRole,
     summarizeRegistrations,
     summarizeSetRallyLog,
+    syncTeamPairsWithRegistrationChange,
     swapRallyCourtOrder
 } from '../js/tournament-engine.js';
 import { createInitialDemoState } from '../js/demo-data.js';
@@ -956,9 +959,58 @@ test('roster player catalog, exclusive select options, duplicate detection, and 
 
     // Approved entries sorted before pending; within approved, Lv1 -> Lv2 -> Lv3
     assert.equal(catalog[0].value, 'Cường');
+    assert.equal(catalog[0].label, 'Cường · Lv1');
     assert.equal(catalog[0].levelIndex, 1);
     assert.equal(catalog[3].value, 'Bình');
     assert.equal(catalog[3].status, 'pending');
+
+    // Blank / whitespace display_name defaults seamlessly to full_name across catalog & options
+    const blankNickCatalog = buildRegisteredPlayerCatalog([
+        { id: 'rx', full_name: 'Đỗ Hoàng Nam', display_name: '   ', skill_level: 'Lv1 - Bậc thầy lão luyện', status: 'approved' }
+    ]);
+    assert.equal(blankNickCatalog[0].value, 'Đỗ Hoàng Nam');
+    assert.equal(blankNickCatalog[0].label, 'Đỗ Hoàng Nam · Lv1');
+    assert.equal(resolveRegisteredDisplayName({ full_name: 'Đỗ Hoàng Nam', display_name: '' }), 'Đỗ Hoàng Nam');
+
+    // Stored pair slot with unique full_name maps cleanly to player's Tên thi đấu in dropdown
+    const fullNameMappedHtml = buildPlayerSelectOptionsHtml(catalog, new Set(), 'Phạm Quốc Cường', 1);
+    assert.ok(fullNameMappedHtml.includes('value="Cường" selected>Cường · Lv1</option>'));
+
+    // Editing Tên thi đấu (or clearing it back to blank -> full_name) syncs across teamPairs
+    const nextRegsRenamed = registrations.map((r) => (
+        r.id === 'r4' ? { ...r, display_name: 'Cường Smash' } : r
+    ));
+    const renamedResult = syncTeamPairsWithRegistrationChange(
+        [{ id: 'p1', pair_label: 'A1', level_index: 1, player_1: 'Cường', player_2: 'Bình' }],
+        registrations,
+        nextRegsRenamed,
+        'r4'
+    );
+    assert.equal(renamedResult.changed, true);
+    assert.equal(renamedResult.teamPairs[0].player_1, 'Cường Smash');
+
+    const clearedNickRegs = nextRegsRenamed.map((r) => (
+        r.id === 'r4' ? { ...r, display_name: 'Phạm Quốc Cường' } : r
+    ));
+    const clearedResult = syncTeamPairsWithRegistrationChange(
+        renamedResult.teamPairs,
+        nextRegsRenamed,
+        clearedNickRegs,
+        'r4'
+    );
+    assert.equal(clearedResult.changed, true);
+    assert.equal(clearedResult.teamPairs[0].player_1, 'Phạm Quốc Cường');
+
+    // Reconciling un-synced full_name slots updates them to Tên thi đấu
+    const reconciled = reconcileTeamPairsDisplayNames(
+        [{ id: 'p1', pair_label: 'A1', level_index: 1, player_1: 'Phạm Quốc Cường', player_2: 'Trần Thị Bình' }],
+        registrations
+    );
+    assert.equal(reconciled.changed, true);
+    assert.deepEqual(
+        [reconciled.teamPairs[0].player_1, reconciled.teamPairs[0].player_2],
+        ['Cường', 'Bình']
+    );
 
     // Duplicate display_name values are disambiguated so keys/values stay unique
     const uniqueValues = new Set(catalog.map((entry) => entry.value));

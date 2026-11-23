@@ -16,6 +16,7 @@ import {
     normalizeSetRallyLogs,
     normalizeSkillLevel,
     parseScheduleValue,
+    resolveCatalogPlayerValue,
     summarizeRegistrations
 } from './tournament-engine.js';
 
@@ -528,7 +529,8 @@ function renderTeamsEditorSubtab(state, adminState) {
         for (let lvl = 1; lvl <= config.levelsCount; lvl++) {
             const pair = pairs.find((p) => p.level_index === lvl);
             for (const field of ['player_1', 'player_2']) {
-                const val = String(pair?.[field] || '').trim();
+                const rawVal = String(pair?.[field] || '').trim();
+                const val = resolveCatalogPlayerValue(catalog, rawVal);
                 const key = val.toLowerCase();
                 slotAssignments.push({ teamId: team.id, lvl, field, val, key });
                 if (key) assignedCounts.set(key, (assignedCounts.get(key) || 0) + 1);
@@ -569,8 +571,8 @@ function renderTeamsEditorSubtab(state, adminState) {
                 player_2: ''
             };
             const levelLabel = config.levelNames[i] || `Level ${lvl}`;
-            const p1Val = String(pair.player_1 || '').trim();
-            const p2Val = String(pair.player_2 || '').trim();
+            const p1Val = resolveCatalogPlayerValue(catalog, String(pair.player_1 || '').trim());
+            const p2Val = resolveCatalogPlayerValue(catalog, String(pair.player_2 || '').trim());
             const p1Opts = buildPlayerSelectOptionsHtml(catalog, getOtherAssignedKeys(p1Val.toLowerCase()), p1Val, lvl);
             const p2Opts = buildPlayerSelectOptionsHtml(catalog, getOtherAssignedKeys(p2Val.toLowerCase()), p2Val, lvl);
 
@@ -1039,7 +1041,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
     const rowsHtml = filteredRegs.map((r, idx) => {
         const st = r.status || 'pending';
         const fullName = String(r.full_name || '');
-        const nickName = String(r.display_name || fullName);
+        const nickName = String(r.display_name || '').trim() || fullName;
         const showMobileNick = Boolean(nickName && nickName !== fullName);
         const displaySkill = normalizeSkillLevel(r.skill_level || '');
         const tierCls = getSkillTierClass(displaySkill);
@@ -1145,7 +1147,7 @@ function renderRegistrationsSubtab(state, adminState, storeMode) {
                     </div>
                     <div>
                         <label class="form-label">Tên thi đấu</label>
-                        <input name="display_name" class="form-input" maxlength="40" placeholder="Để trống nếu trùng">
+                        <input name="display_name" class="form-input" maxlength="40" placeholder="Để trống nếu dùng họ và tên">
                     </div>
                     <div>
                         <label class="form-label">Trình độ *</label>

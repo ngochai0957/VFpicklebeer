@@ -20,9 +20,12 @@ import {
     normalizeSetPlayerStats,
     normalizeSetRallyLogs,
     normalizeSkillLevel,
+    reconcileTeamPairsDisplayNames,
+    resolveCatalogPlayerValue,
     sanitizeRegistrationPayload,
     selectRallyRole,
-    swapRallyCourtOrder
+    swapRallyCourtOrder,
+    syncTeamPairsWithRegistrationChange
 } from './tournament-engine.js';
 import {
     REGISTRATION_TABLE_SQL,
@@ -218,7 +221,7 @@ function downloadRegistrationsCsv(rows) {
         ...sortedRows.map((r, idx) => [
             idx + 1,
             r.full_name || '',
-            r.display_name || r.full_name || '',
+            String(r.display_name || '').trim() || r.full_name || '',
             r.skill_level ? normalizeSkillLevel(r.skill_level) : '',
             r.status === 'approved' ? 'Đã duyệt' : 'Chờ duyệt',
             r.created_at || ''
@@ -281,11 +284,12 @@ function syncRosterPlayerSelects(changedSelect = null) {
 
     const catalog = buildRegisteredPlayerCatalog(appState.adminState.registrations || []);
     if (changedSelect) {
-        const chosenKey = String(changedSelect.value || '').trim().toLowerCase();
+        const chosenVal = resolveCatalogPlayerValue(catalog, String(changedSelect.value || '').trim());
+        const chosenKey = chosenVal.toLowerCase();
         if (chosenKey) {
-            const conflict = selects.some((sel) => sel !== changedSelect && String(sel.value || '').trim().toLowerCase() === chosenKey);
+            const conflict = selects.some((sel) => sel !== changedSelect && resolveCatalogPlayerValue(catalog, String(sel.value || '').trim()).toLowerCase() === chosenKey);
             if (conflict) {
-                showToast(`Người chơi "${changedSelect.value}" đã được chọn ở vị trí khác!`, true);
+                showToast(`Người chơi "${chosenVal}" đã được chọn ở vị trí khác!`, true);
                 changedSelect.value = '';
             }
         }
@@ -293,14 +297,14 @@ function syncRosterPlayerSelects(changedSelect = null) {
 
     const chosenKeysAll = new Set();
     for (const sel of selects) {
-        const val = String(sel.value || '').trim();
+        const val = resolveCatalogPlayerValue(catalog, String(sel.value || '').trim());
         const key = val.toLowerCase();
         if (key) chosenKeysAll.add(key);
 
         const otherAssignedKeys = new Set();
         for (const other of selects) {
             if (other === sel) continue;
-            const otherKey = String(other.value || '').trim().toLowerCase();
+            const otherKey = resolveCatalogPlayerValue(catalog, String(other.value || '').trim()).toLowerCase();
             if (otherKey) otherAssignedKeys.add(otherKey);
         }
         const lvl = Number(sel.dataset.level) || 1;
@@ -436,34 +440,39 @@ function renderHeroAndNav() {
             : `<button type="button" class="smallbtn" data-action="open-login">${ICONS.lock} Quản trị</button>`;
 
         navEl.innerHTML = `
-            <div class="wrap nav-bar-inner">
-                <button type="button" class="brand-btn" data-action="switch-tab" data-tab="standings">
-                    VACIF <span>PICKLEBEER</span>
-                </button>
+            <div class="nav-topbar">
+                <div class="wrap nav-bar-inner">
+                    <button type="button" class="brand-btn" data-action="switch-tab" data-tab="standings">
+                        VACIF <span>PICKLEBEER</span>
+                    </button>
 
-                <nav class="nav-links" role="tablist" aria-label="Điều hướng">
-                    <button type="button" class="nav-tab ${tab === 'standings' ? 'active' : ''}" data-action="switch-tab" data-tab="standings">
-                        Tổng Quan
-                    </button>
-                    <button type="button" class="nav-tab ${tab === 'matches' ? 'active' : ''}" data-action="switch-tab" data-tab="matches">
-                        Lịch Thi Đấu
-                        ${liveMatchesCount > 0 ? `<span class="nav-count live">${liveMatchesCount}</span>` : `<span class="nav-count">${(state.teamMatches || []).length}</span>`}
-                    </button>
-                    <button type="button" class="nav-tab ${tab === 'teams' ? 'active' : ''}" data-action="switch-tab" data-tab="teams">
-                        Đội Hình
-                    </button>
-                    ${awardsTabHtml}
-                    <button type="button" class="nav-tab ${tab === 'rules' ? 'active' : ''}" data-action="switch-tab" data-tab="rules">
-                        Thể Thức
-                    </button>
-                    ${adminTabHtml}
-                </nav>
-
-                <div class="header-actions">
-                    <button type="button" class="smallbtn icon-only" data-action="toggle-tv-mode" title="Chế độ Màn hình TV Sân" aria-label="Chế độ TV">${ICONS.tv}</button>
-                    <button type="button" class="smallbtn icon-only" data-action="share-link" title="Sao chép link chia sẻ giải" aria-label="Chia sẻ link">${ICONS.share}</button>
-                    <button type="button" class="smallbtn icon-only" data-action="refresh-data" title="Làm mới dữ liệu" aria-label="Làm mới dữ liệu">${ICONS.refresh}</button>
-                    ${adminButton}
+                    <div class="header-actions">
+                        <button type="button" class="smallbtn icon-only" data-action="toggle-tv-mode" title="Chế độ Màn hình TV Sân" aria-label="Chế độ TV">${ICONS.tv}</button>
+                        <button type="button" class="smallbtn icon-only" data-action="share-link" title="Sao chép link chia sẻ giải" aria-label="Chia sẻ link">${ICONS.share}</button>
+                        <button type="button" class="smallbtn icon-only" data-action="refresh-data" title="Làm mới dữ liệu" aria-label="Làm mới dữ liệu">${ICONS.refresh}</button>
+                        ${adminButton}
+                    </div>
+                </div>
+            </div>
+            <div class="nav-subbar">
+                <div class="wrap nav-subbar-inner">
+                    <nav class="nav-links" role="tablist" aria-label="Điều hướng">
+                        <button type="button" class="nav-tab ${tab === 'standings' ? 'active' : ''}" data-action="switch-tab" data-tab="standings">
+                            Tổng Quan
+                        </button>
+                        <button type="button" class="nav-tab ${tab === 'matches' ? 'active' : ''}" data-action="switch-tab" data-tab="matches">
+                            Lịch Thi Đấu
+                            ${liveMatchesCount > 0 ? `<span class="nav-count live">${liveMatchesCount}</span>` : `<span class="nav-count">${(state.teamMatches || []).length}</span>`}
+                        </button>
+                        <button type="button" class="nav-tab ${tab === 'teams' ? 'active' : ''}" data-action="switch-tab" data-tab="teams">
+                            Đội Hình
+                        </button>
+                        ${awardsTabHtml}
+                        <button type="button" class="nav-tab ${tab === 'rules' ? 'active' : ''}" data-action="switch-tab" data-tab="rules">
+                            Thể Thức
+                        </button>
+                        ${adminTabHtml}
+                    </nav>
                 </div>
             </div>
         `;
@@ -511,11 +520,13 @@ function renderHeroAndNav() {
         heroElAfter.innerHTML = `
             <div class="wrap">
                 <div class="hero-grid">
-                    <div>
-                        <div class="eyebrow">
-                            <span>VACIF · PickleBeer</span>
-                            ${statusBadge}
-                            ${syncPill}
+                    <div class="hero-intro">
+                        <div class="hero-event-top">
+                            <span class="hero-club-label">VACIF · PICKLEBEER TEAM LEAGUE</span>
+                            <div class="hero-status-group">
+                                ${statusBadge}
+                                ${syncPill}
+                            </div>
                         </div>
                         <h1 class="hero-h1">${formatTwoToneTitle(state.tournament.name)}</h1>
                         <p class="hero-desc">${escapeHtml(state.tournament.subtitle)}</p>
@@ -1490,14 +1501,15 @@ async function handleAction(action, el, event) {
         if (!appState.isAdmin) return;
         try {
             const { draftTeams, draftPairs } = collectRosterDraftFromDom();
-            const duplicates = findDuplicateRosterPlayers(draftPairs);
+            const { teamPairs: normalizedPairs } = reconcileTeamPairsDisplayNames(draftPairs, appState.adminState.registrations || []);
+            const duplicates = findDuplicateRosterPlayers(normalizedPairs);
             if (duplicates.length > 0) {
                 const d = duplicates[0];
                 showToast(`Người chơi "${d.name}" bị chọn trùng ở ${d.slots.join(', ')}. Mỗi người chơi chỉ được xếp 1 vị trí.`, true);
                 return;
             }
             setSaveStatus('Đang lưu đội hình...');
-            appState.data = await store.saveAllRoster(draftTeams, draftPairs);
+            appState.data = await store.saveAllRoster(draftTeams, normalizedPairs);
             setSaveStatus('Đã lưu ✓');
             showToast('Đã cập nhật tên đội và đội hình cố định!');
             renderAll();
@@ -1861,6 +1873,7 @@ document.addEventListener('submit', async (event) => {
         const regId = form.dataset.regId;
         const fd = new FormData(form);
         try {
+            const prevRegs = [...(appState.adminState.registrations || [])];
             const clean = sanitizeRegistrationPayload({
                 full_name: fd.get('full_name'),
                 display_name: fd.get('display_name'),
@@ -1874,11 +1887,21 @@ document.addEventListener('submit', async (event) => {
                 skill_level: clean.skill_level,
                 status: nextStatus
             });
-            appState.adminState.registrations = res?.rows || [];
+            const nextRegs = res?.rows || [];
+            appState.adminState.registrations = nextRegs;
+            const { teamPairs: syncedPairs, changed } = syncTeamPairsWithRegistrationChange(
+                appState.data?.teamPairs || [],
+                prevRegs,
+                nextRegs,
+                regId
+            );
+            if (changed && appState.data?.teams) {
+                appState.data = await store.saveAllRoster(appState.data.teams, syncedPairs);
+            }
             appState.modal = null;
             renderModal();
             setSaveStatus('Đã lưu ✓');
-            showToast('Đã cập nhật thông tin & trình độ người chơi.');
+            showToast(changed ? 'Đã cập nhật thông tin & tên thi đấu cho toàn giải.' : 'Đã cập nhật thông tin & trình độ người chơi.');
             renderAll();
         } catch (err) {
             setSaveStatus('Lỗi!', true);
