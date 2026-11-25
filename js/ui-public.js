@@ -15,6 +15,7 @@ import {
     normalizeConfig,
     normalizeSetPlayerStats,
     normalizeSetRallyLogs,
+    resolveSubMatchDivisionLabel,
     resolveSubMatchSchedule,
     summarizeSetRallyLog
 } from './tournament-engine.js';
@@ -152,7 +153,7 @@ export function renderTeamMatchCard(tm, context, isAdmin = false, options = {}) 
     const rowsHtml = visibleSubs.map((sm) => {
         const pairA = sm.pair_a_id ? pairsMap.get(sm.pair_a_id) : null;
         const pairB = sm.pair_b_id ? pairsMap.get(sm.pair_b_id) : null;
-        const levelLabel = config.levelNames[sm.level_index - 1] || `Level ${sm.level_index}`;
+        const levelLabel = resolveSubMatchDivisionLabel(sm, config, pairA, pairB);
         const ev = sm.eval;
         const st = ev.effectiveStatus;
         const isSubLive = st === 'live';
@@ -1300,34 +1301,39 @@ export function renderTvModeView(state) {
         return ev.effectiveStatus === 'live';
     });
 
-    const standingsHtml = renderStandingsTab(state, false);
+    const refreshIcon = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg>';
+
     const liveCardsHtml = liveMatches.length > 0
-        ? liveMatches.map((tm) => renderTeamMatchCard(tm, context, false, { liveOnly: true })).join('')
-        : '<div class="card card-pad" style="text-align:center;color:var(--muted);">Hiện chưa có sân nào đang thi đấu LIVE.</div>';
+        ? `<div class="tv-live-grid">${liveMatches.map((tm) => renderTeamMatchCard(tm, context, false, { liveOnly: true })).join('')}</div>`
+        : `
+            <div class="card card-pad tv-empty-card">
+                <div class="tv-empty-title">Hiện chưa có trận nào đang thi đấu LIVE</div>
+                <p class="section-sub" style="margin:6px 0 14px;">Các trận đang diễn ra sẽ hiển thị tỉ số đội và tỉ số từng set tại đây theo thời gian thực.</p>
+                <button type="button" class="button" data-action="toggle-tv-mode">Quay lại Bảng chính</button>
+            </div>
+        `;
 
     return `
-        <section>
+        <section class="tv-shell">
             <div class="tv-topbar">
-                <div>
-                    <div style="font-size:12px;opacity:0.75;text-transform:uppercase;letter-spacing:1.2px;font-weight:700;">Bảng Điểm Sân Đấu (TV Mode)</div>
-                    <div style="font-size:22px;font-weight:900;">${escapeHtml(state.tournament.name)}</div>
+                <div class="tv-topbar-info">
+                    <div class="tv-topbar-meta">
+                        <span class="tag tag-status-live"><span class="pulse-dot"></span>TV Mode</span>
+                        <span class="tv-live-count">${liveMatches.length} trận đang Live</span>
+                    </div>
+                    <h1 class="tv-title">${escapeHtml(state.tournament.name)}</h1>
                 </div>
-                <button type="button" class="smallbtn" style="background:#ffffff;color:var(--ink);border-color:#ffffff;" data-action="toggle-tv-mode">Thoát TV Mode</button>
+                <div class="tv-topbar-actions">
+                    <button type="button" class="smallbtn icon-only" data-action="refresh-data" title="Làm mới tỉ số" aria-label="Làm mới tỉ số">${refreshIcon}</button>
+                    <button type="button" class="smallbtn" data-action="toggle-tv-mode">Thoát TV Mode</button>
+                </div>
             </div>
 
-            <div class="tv-grid">
-                <div>
-                    <div class="section-header">
-                        <h2 class="section-title"><span class="pulse-dot"></span>Đang Thi Đấu (${liveMatches.length} Sân)</h2>
-                    </div>
-                    <div style="display:flex;flex-direction:column;gap:14px;">
-                        ${liveCardsHtml}
-                    </div>
-                </div>
-                <div>
-                    ${standingsHtml}
-                </div>
+            <div class="tv-section-head">
+                <h2 class="section-title"><span class="pulse-dot"></span>Đang Thi Đấu (${liveMatches.length})</h2>
+                <span class="section-sub">Tỉ số trận &amp; từng set trực tiếp</span>
             </div>
+            ${liveCardsHtml}
         </section>
     `;
 }
@@ -1548,7 +1554,7 @@ export function renderSubMatchHistoryModal(subId, state, options = {}) {
     const activeLogs = setLogsAll[curSetIdx] || [];
     const summary = summarizeSetRallyLog(activeLogs);
 
-    const levelName = config.levelNames[sm.level_index - 1] || `Level ${sm.level_index}`;
+    const levelName = resolveSubMatchDivisionLabel(sm, config, pairA, pairB);
     const pairACode = pairA?.pair_label || `${teamA?.code || 'A'}${sm.level_index}`;
     const pairBCode = pairB?.pair_label || `${teamB?.code || 'B'}${sm.level_index}`;
     const renderPairLines = (pair, fallbackCode) => {

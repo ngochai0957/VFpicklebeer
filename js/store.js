@@ -192,9 +192,10 @@ class LocalStore {
         });
 
         for (const tm of state.teamMatches) {
+            const existingTmSubs = state.subMatches.filter((sm) => sm.team_match_id === tm.id);
             for (let lvl = 1; lvl <= levelsCount; lvl++) {
-                const exists = state.subMatches.find((sm) => sm.team_match_id === tm.id && sm.level_index === lvl);
-                if (!exists) {
+                const exists = existingTmSubs.find((sm) => sm.level_index === lvl);
+                if (!exists && existingTmSubs.length < levelsCount) {
                     state.subMatches.push({
                         id: `${tm.id}_l${lvl}_${Date.now().toString(36)}`,
                         team_match_id: tm.id,
@@ -206,9 +207,11 @@ class LocalStore {
                         winner_override: null,
                         format_override: null
                     });
-                } else {
-                    exists.pair_a_id = pairLookup.get(`${tm.team_a_id}:${lvl}`) || exists.pair_a_id;
-                    exists.pair_b_id = pairLookup.get(`${tm.team_b_id}:${lvl}`) || exists.pair_b_id;
+                } else if (exists) {
+                    const lvlA = Number(exists.format_override?.levelA) || lvl;
+                    const lvlB = Number(exists.format_override?.levelB) || lvl;
+                    exists.pair_a_id = pairLookup.get(`${tm.team_a_id}:${lvlA}`) || exists.pair_a_id;
+                    exists.pair_b_id = pairLookup.get(`${tm.team_b_id}:${lvlB}`) || exists.pair_b_id;
                 }
             }
         }
@@ -602,9 +605,10 @@ class SupabaseStore {
 
         const subUpserts = [];
         for (const tm of state.teamMatches) {
+            const existingTmSubs = state.subMatches.filter((sm) => sm.team_match_id === tm.id);
             for (let lvl = 1; lvl <= levelsCount; lvl++) {
-                const existing = state.subMatches.find((sm) => sm.team_match_id === tm.id && sm.level_index === lvl);
-                if (!existing) {
+                const existing = existingTmSubs.find((sm) => sm.level_index === lvl);
+                if (!existing && existingTmSubs.length < levelsCount) {
                     subUpserts.push({
                         id: `${tm.id}_l${lvl}_${Date.now().toString(36)}`,
                         team_match_id: tm.id,
@@ -616,9 +620,11 @@ class SupabaseStore {
                         winner_override: null,
                         format_override: null
                     });
-                } else {
-                    const pairAId = pairLookup.get(`${tm.team_a_id}:${lvl}`) || null;
-                    const pairBId = pairLookup.get(`${tm.team_b_id}:${lvl}`) || null;
+                } else if (existing) {
+                    const lvlA = Number(existing.format_override?.levelA) || lvl;
+                    const lvlB = Number(existing.format_override?.levelB) || lvl;
+                    const pairAId = pairLookup.get(`${tm.team_a_id}:${lvlA}`) || null;
+                    const pairBId = pairLookup.get(`${tm.team_b_id}:${lvlB}`) || null;
                     if (existing.pair_a_id !== pairAId || existing.pair_b_id !== pairBId) {
                         subUpserts.push({
                             ...existing,

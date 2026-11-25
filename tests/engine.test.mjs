@@ -6,11 +6,13 @@ import {
     AWARDS_VISIBILITY_MODES,
     advanceRallyServeTurn,
     anonymizeAwardsLeaderboards,
+    applyCourtDragDrop,
     applyRallyOutcomeToSet,
     buildCourtBoard,
     buildPlayerSelectOptionsHtml,
     buildRegisteredPlayerCatalog,
     buildResizedRoster,
+    buildTeamMatchSubMatches,
     calculatePairLeaderboard,
     calculatePlayerLeaderboard,
     calculateStandings,
@@ -23,13 +25,17 @@ import {
     findDuplicateRosterPlayers,
     formatScheduleDisplay,
     generateRoundRobinSchedule,
+    getLevelOrderPresets,
+    isDefaultLevelOrder,
     normalizeConfig,
+    normalizeLevelOrder,
     normalizeRallyState,
     normalizeSetPlayerStats,
     normalizeSetRallyLogs,
     parseScheduleValue,
     reconcileTeamPairsDisplayNames,
     resolveRegisteredDisplayName,
+    resolveSubMatchDivisionLabel,
     resolveSubMatchSchedule,
     sanitizeRegistrationPayload,
     selectRallyRole,
@@ -323,9 +329,10 @@ test('Admin UI renders all 4 subtabs and clean password-only login modal', () =>
     assert.ok(scoresHtml.includes('set-editor-block set-state-completed'));
     assert.ok(scoresHtml.includes('set-editor-block set-state-live'));
     assert.ok(scoresHtml.includes('set-editor-block set-state-waiting'));
-    assert.ok(scoresHtml.includes('level-pill lv-1'));
-    assert.ok(scoresHtml.includes('level-pill lv-2'));
-    assert.ok(scoresHtml.includes('level-pill lv-3'));
+    assert.ok(scoresHtml.includes('Trận 1'));
+    assert.ok(scoresHtml.includes('Trận 2'));
+    assert.ok(scoresHtml.includes('Trận 3'));
+    assert.equal(scoresHtml.includes('class="level-pill lv-1"'), false);
     assert.ok(scoresHtml.includes('ĐANG ĐẤU'));
     assert.ok(scoresHtml.includes('Sắp đấu'));
     assert.ok(scoresHtml.includes('scorer-vs-badge has-score'));
@@ -376,6 +383,23 @@ test('Court Board, Form guide, Tiebreaker annotation, Player Search, and TV Mode
     const tvHtml = renderTvModeView(state);
     assert.ok(tvHtml.includes('TV Mode'));
     assert.ok(tvHtml.includes('VaciF PickleBeer 2026 Team League'));
+    assert.ok(tvHtml.includes('tv-live-grid'));
+    assert.ok(tvHtml.includes('Thoát TV Mode'));
+    assert.ok(tvHtml.includes('Set 1'));
+
+    const tvStylesCss = readFileSync(new URL('../css/styles.css', import.meta.url), 'utf8');
+    assert.equal(tvStylesCss.includes('.header-actions [data-action="toggle-tv-mode"] {\n        display: none;') || tvStylesCss.includes('.header-actions [data-action="toggle-tv-mode"] {\r\n        display: none;'), false);
+
+    const noLiveState = createInitialDemoState('main');
+    noLiveState.teamMatches.forEach((tm) => { tm.status = 'upcoming'; });
+    noLiveState.subMatches.forEach((sm) => {
+        sm.status = 'upcoming';
+        sm.sets = [{ a: 0, b: 0 }];
+        sm.winner_override = null;
+        sm.format_override = null;
+    });
+    const emptyTvHtml = renderTvModeView(noLiveState);
+    assert.ok(emptyTvHtml.includes('tv-empty-card'));
 });
 
 test('Live view hides upcoming pairs, shows ready pairs subdued, and distinguishes Set 1-3 vs Chung cuoc', () => {
@@ -578,7 +602,7 @@ test('Awards leaderboards rank Best Pair, Top Scorer (regardless of win/loss), a
     assert.equal(standingsHtml.includes('Bảng Vinh Danh &amp; Thống Kê Cá Nhân'), false);
     assert.equal(standingsHtml.includes('Giải Phụ'), false);
 
-    const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: 'tm_r1_ab' }, 'local');
+    const adminScoresHtml = renderAdminTab(state, { subtab: 'scores', selectedMatchId: 'tm_r2_ac' }, 'local');
     assert.equal(adminScoresHtml.includes('data-action="step-player-stat"'), false);
     assert.equal(adminScoresHtml.includes('data-action="input-player-stat"'), false);
     assert.equal(adminScoresHtml.includes('data-action="input-score"'), false);
@@ -699,20 +723,25 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     assert.equal(rally.serveTurn, 1);
     assert.equal(rally.receiverSlot, 'b1');
 
-    // Admin UI places WIN badge beside winning team (A1 WIN on A side, B2 WIN on B side), with exact 6 PPA action buttons
+    // Admin UI places WIN badge beside winning team (A1 WIN on A side, B2 WIN on B side), with exact 6 PPA action buttons on live sets
     const state = createInitialDemoState();
+    const adminCompletedHtml = renderAdminTab(state, {
+        subtab: 'scores',
+        selectedMatchId: 'tm_r1_ab'
+    }, 'local');
+    assert.match(adminCompletedHtml, /WIN<\/span>\s*<span class="set-team-tag[^"]*"[^>]*>A1<\/span>/);
+    assert.match(adminCompletedHtml, /<span class="set-team-tag[^"]*"[^>]*>B2<\/span>\s*<span class="set-auto-badge win">[^<]*WIN<\/span>/);
+
     const adminHtml = renderAdminTab(state, {
         subtab: 'scores',
-        selectedMatchId: 'tm_r1_ab',
+        selectedMatchId: 'tm_r2_ac',
         rallyBySet: {
-            'sm_r1_ab_1:0': { serverSlot: 'a2', receiverSlot: 'b1', serveTurn: 2 }
+            'sm_r2_ac_2:2': { serverSlot: 'a2', receiverSlot: 'b1', serveTurn: 2 }
         },
         rallyUndoBySet: {
-            'sm_r1_ab_1:0': [{ setScore: { a: 10, b: 7 } }]
+            'sm_r2_ac_2:2': [{ setScore: { a: 7, b: 6 } }]
         }
     }, 'local');
-    assert.match(adminHtml, /WIN<\/span>\s*<span class="set-team-tag"[^>]*>A1<\/span>/);
-    assert.match(adminHtml, /<span class="set-team-tag"[^>]*>B2<\/span>\s*<span class="set-auto-badge win">[^<]*WIN<\/span>/);
     assert.equal(adminHtml.includes('SIDE-OUT'), false);
     assert.equal(adminHtml.includes('data-outcome="server-ace"'), false);
     assert.ok(adminHtml.includes('tấn công'));
@@ -734,9 +763,46 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     assert.ok(adminHtml.includes('Phát 2'));
     assert.ok(adminHtml.includes('set-sticky-scorebar'));
     assert.equal(adminHtml.includes('set-player-head'), false);
-    // Mobile ergonomic order inside set: sticky Set+Score bar -> scoring buttons -> individual player stats
-    assert.ok(adminHtml.indexOf('set-sticky-scorebar') < adminHtml.indexOf('rally-control-bar'));
-    assert.ok(adminHtml.indexOf('rally-actions-wrap') < adminHtml.indexOf('set-player-cols'));
+    // Court simulator order inside set: sticky Set+Score bar -> PPA 3-number call bar -> 2-half court arena -> bottom fault/undo
+    assert.ok(adminHtml.includes('ppa-call-numbers'));
+    assert.ok(adminHtml.includes('8 - 6 - 2'));
+    assert.ok(adminHtml.includes('is-attack-half'));
+    assert.ok(adminHtml.includes('is-defense-half'));
+    assert.ok(adminHtml.includes('data-court-zone="true"'));
+    assert.ok(adminHtml.includes('data-action="swap-court-sides"'));
+    assert.ok(adminHtml.includes('<span class="serving-side-tag is-attack">Tấn công</span>'));
+    assert.ok(adminHtml.includes('<span class="serving-side-tag is-defense">Phòng thủ</span>'));
+    assert.equal(adminHtml.includes('court-role-live-tag'), false);
+    assert.ok(adminHtml.indexOf('set-sticky-scorebar') < adminHtml.indexOf('ppa-call-bar'));
+    assert.ok(adminHtml.indexOf('ppa-call-bar') < adminHtml.indexOf('court-arena'));
+    assert.ok(adminHtml.indexOf('court-arena') < adminHtml.indexOf('court-bottom-actions'));
+
+    const flippedAdminHtml = renderAdminTab(state, {
+        subtab: 'scores',
+        selectedMatchId: 'tm_r2_ac',
+        courtFlippedBySet: { 'sm_r2_ac_2:2': true }
+    }, 'local');
+    assert.ok(flippedAdminHtml.indexOf('data-court-half="b"') < flippedAdminHtml.indexOf('data-court-half="a"'));
+
+    // Top half places 1·Phải on Left col and 2·Trái on Right col; Bottom half places 2·Trái on Left col and 1·Phải on Right col (Phải chéo Phải, Trái chéo Trái)
+    const topHalfMatch = adminHtml.match(/data-court-pos="top"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/);
+    const bottomHalfMatch = adminHtml.match(/data-court-pos="bottom"[\s\S]*?<\/div>\s*<\/div>\s*<\/div>/);
+    assert.ok(topHalfMatch && bottomHalfMatch);
+    assert.ok(topHalfMatch[0].indexOf('1 · Phải') < topHalfMatch[0].indexOf('2 · Trái'));
+    assert.ok(bottomHalfMatch[0].indexOf('2 · Trái') < bottomHalfMatch[0].indexOf('1 · Phải'));
+
+    // Drag-and-drop position swap (same team) & cross-net Server -> Receiver assignment
+    let dragRally = normalizeRallyState(null, pairA, pairB);
+    dragRally = applyCourtDragDrop(dragRally, 'a1', 'a2', pairA, pairB);
+    assert.deepEqual(dragRally.orderA, ['a2', 'a1']);
+    dragRally = applyCourtDragDrop(dragRally, 'b2', 'a1', pairA, pairB);
+    assert.equal(dragRally.serverSlot, 'b2');
+    assert.equal(dragRally.receiverSlot, 'a1');
+    assert.equal(dragRally.serveTurn, 1);
+    // Changing server within already-serving team B preserves receiver a1
+    dragRally = selectRallyRole(dragRally, 'server', 'b1', pairA, pairB);
+    assert.equal(dragRally.serverSlot, 'b1');
+    assert.equal(dragRally.receiverSlot, 'a1');
 });
 
 test('Google-Form-style player registration page and Admin registrations dashboard', () => {
@@ -1169,4 +1235,98 @@ test('persistent per-set rally history log, analytics summary, and play-by-play 
     assert.ok(modalHtml.includes('history-svg'));
     assert.ok(modalHtml.includes('⇄ Đổi giao'));
     assert.ok(modalHtml.includes('0-0-2'));
+});
+
+test('customizable level court entry order and cross-level team pairings in auto schedule and match builder', () => {
+    assert.deepEqual(normalizeLevelOrder('3-2-1', 3), [3, 2, 1]);
+    assert.deepEqual(normalizeLevelOrder([2, 3, 1], 3), [2, 3, 1]);
+    assert.deepEqual(normalizeLevelOrder('2', 3), [2, 1, 3]);
+    assert.equal(isDefaultLevelOrder([1, 2, 3], [1, 2, 3], 3), true);
+    assert.equal(isDefaultLevelOrder([3, 2, 1], [3, 2, 1], 3), false);
+    assert.equal(isDefaultLevelOrder([1, 2, 3], [2, 3, 1], 3), false);
+
+    const presets = getLevelOrderPresets(3, ['Level 1', 'Level 2', 'Level 3']);
+    assert.equal(presets.length, 6);
+    assert.equal(presets[0].key, '1-2-3');
+    assert.equal(presets[1].key, '3-2-1');
+
+    const { teams, teamPairs } = buildResizedRoster([], [], 4, 3, 'main');
+    const pairsMap = new Map(teamPairs.map((p) => [p.id, p]));
+    const teamsMap = new Map(teams.map((t) => [t.id, t]));
+
+    // 1. Reverse head-to-head order: Level 3 -> Level 2 -> Level 1 goes on court first
+    const schedRev = generateRoundRobinSchedule(teams, teamPairs, {
+        levelsCount: 3,
+        levelOrderA: [3, 2, 1],
+        levelOrderB: [3, 2, 1]
+    });
+    const firstMatch = schedRev.teamMatches[0];
+    const evalRev = evaluateTeamMatch(firstMatch, schedRev.subMatches, { levelsCount: 3 });
+    assert.deepEqual(evalRev.subMatches.map((sm) => sm.level_index), [3, 2, 1]);
+    assert.deepEqual(evalRev.subMatches.map((sm) => sm.format_override?.displayOrder), [1, 2, 3]);
+    assert.equal(pairsMap.get(evalRev.subMatches[0].pair_a_id).level_index, 3);
+    assert.equal(pairsMap.get(evalRev.subMatches[0].pair_b_id).level_index, 3);
+
+    // 2. Asymmetric level lineup between Team A ([2, 3, 1]) and Team B ([3, 1, 2])
+    const pairLookup = new Map(teamPairs.map((p) => [`${p.team_id}:${p.level_index}`, p.id]));
+    const crossSubs = buildTeamMatchSubMatches('tm_cross', teams[0].id, teams[1].id, pairLookup, {
+        levelsCount: 3,
+        levelOrderA: [2, 3, 1],
+        levelOrderB: [3, 1, 2]
+    });
+    assert.equal(crossSubs.length, 3);
+    assert.equal(pairsMap.get(crossSubs[0].pair_a_id).pair_label, 'A2');
+    assert.equal(pairsMap.get(crossSubs[0].pair_b_id).pair_label, 'B3');
+    assert.equal(resolveSubMatchDivisionLabel(crossSubs[0], { levelsCount: 3, levelNames: ['Level 1', 'Level 2', 'Level 3'] }, pairsMap.get(crossSubs[0].pair_a_id), pairsMap.get(crossSubs[0].pair_b_id)), 'Level 2 vs Level 3');
+
+    const state = createInitialDemoState('main');
+    const schedTabHtml = renderAdminTab(state, { subtab: 'schedule' }, 'local');
+    assert.equal(schedTabHtml.includes('id="rr-level-order-a"'), false);
+    assert.equal(schedTabHtml.includes('id="sched-level-order-a"'), false);
+
+    // Make subMatch 1 LIVE, subMatch 2 COMPLETED (with 1 completed set + 1 live set), and subMatch 3 UPCOMING
+    const tm0 = state.teamMatches[0];
+    const tm0Subs = state.subMatches.filter((s) => s.team_match_id === tm0.id).sort((a, b) => a.level_index - b.level_index);
+    tm0Subs[0].status = 'live';
+    tm0Subs[0].sets = [{ a: 11, b: 6 }, { a: 4, b: 2 }];
+    tm0Subs[1].status = 'completed';
+    tm0Subs[1].sets = [{ a: 11, b: 5 }, { a: 11, b: 7 }];
+    tm0Subs[2].status = 'upcoming';
+    tm0Subs[2].sets = [{ a: 0, b: 0 }];
+
+    const scoresTabHtml = renderAdminTab(state, {
+        subtab: 'scores',
+        selectedMatchId: tm0.id,
+        expandedSubs: { [tm0Subs[0].id]: true, [tm0Subs[1].id]: true, [tm0Subs[2].id]: true }
+    }, 'local');
+    assert.ok(scoresTabHtml.includes('data-action="sub-pair-select"'));
+    assert.ok(scoresTabHtml.includes('>Trận 1<'));
+    assert.equal(scoresTabHtml.includes('Cặp Team A'), false);
+    assert.ok(scoresTabHtml.includes('>Level 1</option>'));
+    assert.ok(scoresTabHtml.includes('>Level 2</option>'));
+    assert.ok(scoresTabHtml.includes('>Level 3</option>'));
+
+    // Completed Set 1 in Trận 1 completely omits the court scorer box (only shows again if reset), while live Set 2 in Trận 1 is expanded
+    assert.ok(scoresTabHtml.includes('set-editor-block set-state-completed is-set-collapsed'));
+    assert.equal(scoresTabHtml.includes(`data-set-details="${tm0Subs[0].id}:0"`), false);
+    assert.ok(scoresTabHtml.includes('set-editor-block set-state-live is-set-expanded'));
+    assert.ok(scoresTabHtml.includes(`class="set-player-box court-simulator-box" data-set-details="${tm0Subs[0].id}:1"`));
+
+    // When a sub-match already has 3 sets, the '+ Thêm Set' button is hidden
+    tm0Subs[0].sets = [{ a: 11, b: 6 }, { a: 8, b: 11 }, { a: 4, b: 2 }];
+    const scores3SetsHtml = renderAdminTab(state, {
+        subtab: 'scores',
+        selectedMatchId: tm0.id,
+        expandedSubs: { [tm0Subs[0].id]: true }
+    }, 'local');
+    assert.equal(scores3SetsHtml.includes(`data-action="add-set" data-sub-id="${tm0Subs[0].id}"`), false);
+    assert.ok(scores3SetsHtml.includes(`data-action="add-set" data-sub-id="${tm0Subs[2].id}"`));
+
+    // In Trận 3 (upcoming), neither Level 1 (LIVE in Trận 1) nor Level 2 (COMPLETED in Trận 2) is in the dropdown options
+    const sub3BlockStart = scoresTabHtml.indexOf(`data-sub-details="${tm0Subs[2].id}"`);
+    const sub3BlockEnd = scoresTabHtml.indexOf('set-editor-block', sub3BlockStart);
+    const sub3ToolbarHtml = scoresTabHtml.slice(sub3BlockStart, sub3BlockEnd);
+    assert.equal(sub3ToolbarHtml.includes('>Level 1</option>'), false);
+    assert.equal(sub3ToolbarHtml.includes('>Level 2</option>'), false);
+    assert.ok(sub3ToolbarHtml.includes('>Level 3</option>'));
 });

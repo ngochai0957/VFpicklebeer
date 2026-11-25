@@ -1,10 +1,12 @@
 import { createInitialDemoState } from './demo-data.js';
 import { createStore } from './store.js';
 import {
+    applyCourtDragDrop,
     applyRallyOutcomeToSet,
     buildPlayerSelectOptionsHtml,
     buildRegisteredPlayerCatalog,
     buildResizedRoster,
+    buildTeamMatchSubMatches,
     calculateStandings,
     combineScheduleValue,
     createRallyLogEntry,
@@ -16,6 +18,7 @@ import {
     getSkillLevelRank,
     getSubMatchStatusRank,
     normalizeConfig,
+    normalizeLevelOrder,
     normalizeRallyState,
     normalizeSetPlayerStats,
     normalizeSetRallyLogs,
@@ -72,21 +75,28 @@ function isRegisterPageMode() {
 
 function parseTabFromHash() {
     if (typeof window === 'undefined' || isRegisterPageMode()) {
-        return { tab: 'standings', adminSubtab: 'scores' };
+        return { tab: 'standings', adminSubtab: 'scores', tvMode: false };
     }
+    const params = new URLSearchParams(window.location.search);
+    const tvQuery = ['1', 'true', 'yes'].includes((params.get('tv') || '').toLowerCase());
     const raw = String(window.location.hash || '').replace(/^#\/?/, '').trim().toLowerCase();
-    if (!raw) return { tab: 'standings', adminSubtab: 'scores' };
+    if (raw === 'tv' || tvQuery) {
+        return { tab: 'standings', adminSubtab: 'scores', tvMode: true };
+    }
+    if (!raw) return { tab: 'standings', adminSubtab: 'scores', tvMode: false };
     const [tabPart, subPart] = raw.split('/');
     const tab = VALID_TABS.has(tabPart) ? tabPart : 'standings';
     const adminSubtab = VALID_ADMIN_SUBTABS.has(subPart) ? subPart : 'scores';
-    return { tab, adminSubtab };
+    return { tab, adminSubtab, tvMode: false };
 }
 
 function syncUrlHashWithTab(replace = false) {
     if (typeof window === 'undefined' || isRegisterPageMode()) return;
-    const nextHash = appState.activeTab === 'admin'
-        ? `#admin/${appState.adminState.subtab || 'scores'}`
-        : `#${appState.activeTab || 'standings'}`;
+    const nextHash = appState.tvMode
+        ? '#tv'
+        : (appState.activeTab === 'admin'
+            ? `#admin/${appState.adminState.subtab || 'scores'}`
+            : `#${appState.activeTab || 'standings'}`);
     if (window.location.hash === nextHash) return;
     if (replace && typeof window.history?.replaceState === 'function') {
         window.history.replaceState(null, '', nextHash);
@@ -104,7 +114,7 @@ const appState = {
     isAdmin: false,
     adminEmail: null,
     activeTab: initialRoute.tab,
-    tvMode: false,
+    tvMode: initialRoute.tvMode,
     sessionMaskSeed: generateSessionMaskSeed(),
     teamsQuery: '',
     awardsFilters: {
@@ -1011,6 +1021,9 @@ function resetSetStats(subId, setIdx) {
     };
     setRallyLogs[setIdx] = [];
     sets[setIdx] = { a: 0, b: 0 };
+    if (appState.adminState.expandedSets) {
+        appState.adminState.expandedSets[`${subId}:${setIdx}`] = true;
+    }
     setSetRallyState(subId, setIdx, normalizeRallyState(null, pairA, pairB));
     commitSetStatsAndScore(sm, setIdx, setStats, sets, setRallyLogs);
 }
@@ -1395,6 +1408,18 @@ async function handleAction(action, el, event) {
         return;
     }
 
+    if (action === 'swap-court-sides') {
+        if (!appState.isAdmin) return;
+        const subId = el.dataset.subId;
+        const setIdx = Number(el.dataset.setIdx);
+        if (!subId) return;
+        const key = `${subId}:${setIdx}`;
+        if (!appState.adminState.courtFlippedBySet) appState.adminState.courtFlippedBySet = {};
+        appState.adminState.courtFlippedBySet[key] = !appState.adminState.courtFlippedBySet[key];
+        renderAll();
+        return;
+    }
+
     if (action === 'set-serve-turn') {
         if (!appState.isAdmin || !appState.data) return;
         const subId = el.dataset.subId;
@@ -1465,6 +1490,10 @@ async function handleAction(action, el, event) {
         const subId = el.dataset.subId;
         const sm = appState.data?.subMatches.find((x) => x.id === subId);
         if (!sm) return;
+        if (Array.isArray(sm.sets) && sm.sets.length >= 3) {
+            showToast('Tối đa 3 Set cho mỗi trận đấu.', true);
+            return;
+        }
         sm.sets = [...(sm.sets || []), { a: 0, b: 0 }];
         if (sm.status === 'completed') sm.status = 'live';
         queueSubMatchSave(subId);
@@ -1580,6 +1609,27 @@ async function handleAction(action, el, event) {
         appState.adminState.expandedSubs = {
             ...(appState.adminState.expandedSubs || {}),
             [subId]: nextExpanded
+        };
+        renderMainContent();
+        return;
+    }
+
+    if (action === 'toggle-set-details') {
+        if (!appState.isAdmin || !appState.data) return;
+        const subId = el.dataset.subId;
+        const setIdx = Number(el.dataset.setIdx);
+        if (!subId || !Number.isFinite(setIdx)) return;
+        const key = `${subId}:${setIdx}`;
+        const sm = appState.data.subMatches.find((x) => x.id === subId);
+        const config = normalizeConfig(appState.data.tournament?.config);
+        const ev = sm ? evaluateSubMatch(sm, config) : null;
+        const isSetCompleted = Boolean(ev?.sets?.[setIdx]?.winner);
+        if (isSetCompleted) return;
+        const curOverride = appState.adminState.expandedSets?.[key];
+        const curExpanded = typeof curOverride === 'boolean' ? curOverride : true;
+        appState.adminState.expandedSets = {
+            ...(appState.adminState.expandedSets || {}),
+            [key]: !curExpanded
         };
         renderMainContent();
         return;
@@ -1739,6 +1789,105 @@ document.addEventListener('change', async (event) => {
         const field = target.dataset.field;
         if (!['court', 'scheduledTime'].includes(field)) return;
         await updateSubMatchOverrideFields(target.dataset.subId, { [field]: target.value });
+        return;
+    }
+
+    if (action === 'sub-pair-select') {
+        if (!appState.isAdmin || !appState.data) return;
+        const subId = target.dataset.subId;
+        const side = target.dataset.side === 'b' ? 'b' : 'a';
+        const nextPairId = String(target.value || '').trim();
+        const sm = appState.data.subMatches.find((x) => x.id === subId);
+        if (!sm || !nextPairId) return;
+        const tm = appState.data.teamMatches.find((m) => m.id === sm.team_match_id);
+        if (!tm) return;
+        const config = normalizeConfig(appState.data.tournament?.config);
+        const evalTm = evaluateTeamMatch(tm, appState.data.subMatches, config);
+        const isEvalSubLocked = (s) => {
+            const st = s?.eval?.effectiveStatus || s?.status || 'upcoming';
+            return st === 'live' || st === 'completed' || Boolean(s?.eval?.isDecided);
+        };
+        const currentEvalSub = evalTm.subMatches.find((x) => x.id === subId);
+        if (isEvalSubLocked(currentEvalSub) || sm.status === 'live' || sm.status === 'completed') {
+            showToast('Trận đang đấu hoặc đã hoàn thành không thể đổi Level.', true);
+            renderMainContent();
+            return;
+        }
+
+        const pairs = appState.data.teamPairs || [];
+        const selectedPair = pairs.find((p) => p.id === nextPairId);
+        if (!selectedPair) return;
+
+        const orderedIds = evalTm.subMatches.map((x) => x.id);
+        const matchSubs = orderedIds
+            .map((id) => appState.data.subMatches.find((x) => x.id === id))
+            .filter(Boolean);
+        const pairKey = side === 'a' ? 'pair_a_id' : 'pair_b_id';
+        const oldPairId = sm[pairKey];
+        const swapTarget = matchSubs.find((x) => x.id !== sm.id && x[pairKey] === nextPairId);
+        if (swapTarget) {
+            const swapEvalSub = evalTm.subMatches.find((x) => x.id === swapTarget.id);
+            if (isEvalSubLocked(swapEvalSub) || swapTarget.status === 'live' || swapTarget.status === 'completed') {
+                showToast('Level này đang thi đấu hoặc đã hoàn thành ở trận khác nên không thể đổi.', true);
+                renderMainContent();
+                return;
+            }
+        }
+
+        const buildUpdatedSubPatch = (subObj, newPairAId, newPairBId, displayOrder) => {
+            const pA = pairs.find((p) => p.id === newPairAId);
+            const pB = pairs.find((p) => p.id === newPairBId);
+            const lvlA = Number(pA?.level_index) || Number(subObj.level_index) || 1;
+            const lvlB = Number(pB?.level_index) || Number(subObj.level_index) || 1;
+            const nextOv = {
+                ...(subObj.format_override || {}),
+                displayOrder
+            };
+            if (lvlA !== lvlB) {
+                nextOv.levelA = lvlA;
+                nextOv.levelB = lvlB;
+            } else {
+                delete nextOv.levelA;
+                delete nextOv.levelB;
+            }
+            return {
+                pair_a_id: newPairAId,
+                pair_b_id: newPairBId,
+                level_index: lvlA,
+                format_override: nextOv
+            };
+        };
+
+        try {
+            setSaveStatus('Đang lưu...');
+            const updates = [];
+            matchSubs.forEach((subObj, slotIdx) => {
+                const displayOrder = slotIdx + 1;
+                let targetA = subObj.pair_a_id;
+                let targetB = subObj.pair_b_id;
+                if (subObj.id === sm.id) {
+                    targetA = side === 'a' ? nextPairId : subObj.pair_a_id;
+                    targetB = side === 'b' ? nextPairId : subObj.pair_b_id;
+                } else if (swapTarget && subObj.id === swapTarget.id && oldPairId && oldPairId !== nextPairId) {
+                    targetA = side === 'a' ? oldPairId : subObj.pair_a_id;
+                    targetB = side === 'b' ? oldPairId : subObj.pair_b_id;
+                }
+                const patch = buildUpdatedSubPatch(subObj, targetA, targetB, displayOrder);
+                Object.assign(subObj, patch);
+                updates.push({ id: subObj.id, patch });
+            });
+
+            for (const u of updates) {
+                appState.data = await store.updateSubMatch(u.id, u.patch);
+            }
+
+            setSaveStatus('Đã lưu ✓');
+            showToast('Đã gán Level cho trận đấu hiện tại!');
+            renderAll();
+        } catch (err) {
+            setSaveStatus('Lỗi lưu!', true);
+            showToast(err.message || 'Không thể cập nhật Level ra sân.', true);
+        }
         return;
     }
 
@@ -2000,6 +2149,8 @@ document.addEventListener('submit', async (event) => {
     if (form.id === 'admin-generate-rr-form') {
         const fd = new FormData(form);
         const doubleRR = fd.get('doubleRoundRobin') === 'on';
+        const rawOrderA = String(fd.get('levelOrderA') || '').trim();
+        const rawOrderB = String(fd.get('levelOrderB') || 'same').trim();
         const hasExistingRr = appState.data.teamMatches.some((tm) => (tm.stage || 'round_robin') === 'round_robin');
 
         if (hasExistingRr) {
@@ -2014,7 +2165,19 @@ document.addEventListener('submit', async (event) => {
         try {
             setSaveStatus('Đang tạo lịch...');
             const config = normalizeConfig(appState.data.tournament?.config);
-            await store.updateTournament({ config: { ...config, doubleRoundRobin: doubleRR } });
+            const levelOrderA = normalizeLevelOrder(rawOrderA || config.levelOrder, config.levelsCount);
+            const levelOrderB = (!rawOrderB || rawOrderB === 'same')
+                ? [...levelOrderA]
+                : normalizeLevelOrder(rawOrderB, config.levelsCount);
+
+            await store.updateTournament({
+                config: {
+                    ...config,
+                    doubleRoundRobin: doubleRR,
+                    levelOrder: levelOrderA,
+                    levelOrderB
+                }
+            });
 
             const { teamMatches, subMatches } = generateRoundRobinSchedule(
                 appState.data.teams,
@@ -2022,6 +2185,8 @@ document.addEventListener('submit', async (event) => {
                 {
                     doubleRoundRobin: doubleRR,
                     levelsCount: config.levelsCount,
+                    levelOrderA,
+                    levelOrderB,
                     tournamentId: appState.data.tournament.id
                 }
             );
@@ -2049,6 +2214,13 @@ document.addEventListener('submit', async (event) => {
         try {
             setSaveStatus('Đang thêm trận...');
             const config = normalizeConfig(appState.data.tournament?.config);
+            const rawOrderA = String(fd.get('levelOrderA') || '').trim();
+            const rawOrderB = String(fd.get('levelOrderB') || 'same').trim();
+            const levelOrderA = normalizeLevelOrder(rawOrderA || config.levelOrder, config.levelsCount);
+            const levelOrderB = (!rawOrderB || rawOrderB === 'same')
+                ? [...levelOrderA]
+                : normalizeLevelOrder(rawOrderB, config.levelsCount);
+
             const stage = String(fd.get('stage') || 'playoff');
             const roundNumber = appState.data.teamMatches.reduce((max, m) => Math.max(max, m.round_number || 1), 0) + 1;
             const sortOrder = appState.data.teamMatches.reduce((max, m) => Math.max(max, m.sort_order || 1), 0) + 1;
@@ -2070,20 +2242,11 @@ document.addEventListener('submit', async (event) => {
             };
 
             const pairLookup = new Map(appState.data.teamPairs.map((p) => [`${p.team_id}:${p.level_index}`, p.id]));
-            const newSubs = [];
-            for (let lvl = 1; lvl <= config.levelsCount; lvl++) {
-                newSubs.push({
-                    id: `${tmId}_l${lvl}`,
-                    team_match_id: tmId,
-                    level_index: lvl,
-                    pair_a_id: pairLookup.get(`${teamAId}:${lvl}`) || null,
-                    pair_b_id: pairLookup.get(`${teamBId}:${lvl}`) || null,
-                    sets: [{ a: 0, b: 0 }],
-                    status: 'upcoming',
-                    winner_override: null,
-                    format_override: null
-                });
-            }
+            const newSubs = buildTeamMatchSubMatches(tmId, teamAId, teamBId, pairLookup, {
+                levelsCount: config.levelsCount,
+                levelOrderA,
+                levelOrderB
+            });
 
             appState.data = await store.createTeamMatch(newMatch, newSubs);
             setSaveStatus('Đã lưu ✓');
@@ -2159,6 +2322,128 @@ document.addEventListener('keydown', (event) => {
     }
 });
 
+let activeCourtDrag = null;
+
+function commitCourtZoneDrop(sourceInfo, targetZoneEl) {
+    if (!appState.isAdmin || !appState.data || !sourceInfo || !targetZoneEl) return;
+    const subId = targetZoneEl.dataset.subId;
+    const setIdx = Number(targetZoneEl.dataset.setIdx);
+    const targetSlot = targetZoneEl.dataset.slot;
+    if (!subId || subId !== sourceInfo.subId || setIdx !== sourceInfo.setIdx || !targetSlot || targetSlot === sourceInfo.slot) {
+        return;
+    }
+    const sm = appState.data.subMatches.find((x) => x.id === subId);
+    if (!sm) return;
+    const { pairA, pairB } = getSubMatchPairObjects(sm);
+    const cur = getSetRallyState(subId, setIdx, pairA, pairB);
+    const nextRally = applyCourtDragDrop(cur, sourceInfo.slot, targetSlot, pairA, pairB);
+    setSetRallyState(subId, setIdx, nextRally);
+    renderAll();
+}
+
+function clearCourtDragHighlights() {
+    document.querySelectorAll('.court-zone.is-dragging, .court-zone.is-drop-target').forEach((el) => {
+        el.classList.remove('is-dragging', 'is-drop-target');
+    });
+}
+
+document.addEventListener('dragstart', (event) => {
+    const zone = event.target?.closest?.('.court-zone[data-court-zone]');
+    if (!zone || !appState.isAdmin) return;
+    activeCourtDrag = {
+        subId: zone.dataset.subId,
+        setIdx: Number(zone.dataset.setIdx),
+        slot: zone.dataset.slot,
+        side: zone.dataset.side
+    };
+    zone.classList.add('is-dragging');
+    if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        try {
+            event.dataTransfer.setData('text/plain', zone.dataset.slot || '');
+        } catch {}
+    }
+});
+
+document.addEventListener('dragover', (event) => {
+    if (!activeCourtDrag) return;
+    const zone = event.target?.closest?.('.court-zone[data-court-zone]');
+    if (!zone) return;
+    if (zone.dataset.subId === activeCourtDrag.subId && Number(zone.dataset.setIdx) === activeCourtDrag.setIdx && zone.dataset.slot !== activeCourtDrag.slot) {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+        document.querySelectorAll('.court-zone.is-drop-target').forEach((el) => {
+            if (el !== zone) el.classList.remove('is-drop-target');
+        });
+        zone.classList.add('is-drop-target');
+    }
+});
+
+document.addEventListener('dragleave', (event) => {
+    const zone = event.target?.closest?.('.court-zone[data-court-zone]');
+    if (zone && !zone.contains(event.relatedTarget)) {
+        zone.classList.remove('is-drop-target');
+    }
+});
+
+document.addEventListener('drop', (event) => {
+    if (!activeCourtDrag) return;
+    const zone = event.target?.closest?.('.court-zone[data-court-zone]');
+    const src = activeCourtDrag;
+    activeCourtDrag = null;
+    clearCourtDragHighlights();
+    if (!zone) return;
+    event.preventDefault();
+    commitCourtZoneDrop(src, zone);
+});
+
+document.addEventListener('dragend', () => {
+    activeCourtDrag = null;
+    clearCourtDragHighlights();
+});
+
+document.addEventListener('touchstart', (event) => {
+    const handle = event.target?.closest?.('.court-zone-drag-handle');
+    if (!handle || !appState.isAdmin) return;
+    const zone = handle.closest('.court-zone[data-court-zone]');
+    if (!zone) return;
+    activeCourtDrag = {
+        subId: zone.dataset.subId,
+        setIdx: Number(zone.dataset.setIdx),
+        slot: zone.dataset.slot,
+        side: zone.dataset.side,
+        isTouch: true
+    };
+    zone.classList.add('is-dragging');
+}, { passive: true });
+
+document.addEventListener('touchmove', (event) => {
+    if (!activeCourtDrag?.isTouch) return;
+    const touch = event.touches?.[0];
+    if (!touch) return;
+    const elUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+    const zone = elUnder?.closest?.('.court-zone[data-court-zone]');
+    document.querySelectorAll('.court-zone.is-drop-target').forEach((el) => {
+        if (el !== zone) el.classList.remove('is-drop-target');
+    });
+    if (zone && zone.dataset.subId === activeCourtDrag.subId && Number(zone.dataset.setIdx) === activeCourtDrag.setIdx && zone.dataset.slot !== activeCourtDrag.slot) {
+        zone.classList.add('is-drop-target');
+    }
+}, { passive: true });
+
+document.addEventListener('touchend', (event) => {
+    if (!activeCourtDrag?.isTouch) return;
+    const src = activeCourtDrag;
+    activeCourtDrag = null;
+    const touch = event.changedTouches?.[0];
+    const elUnder = touch ? document.elementFromPoint(touch.clientX, touch.clientY) : null;
+    const zone = elUnder?.closest?.('.court-zone[data-court-zone]');
+    clearCourtDragHighlights();
+    if (zone) {
+        commitCourtZoneDrop(src, zone);
+    }
+});
+
 if (typeof window !== 'undefined') {
     window.addEventListener('resize', () => {
         syncMobileHeaderHeight();
@@ -2172,7 +2457,7 @@ if (typeof window !== 'undefined') {
         const route = parseTabFromHash();
         appState.activeTab = route.tab;
         appState.adminState.subtab = route.adminSubtab;
-        appState.tvMode = false;
+        appState.tvMode = Boolean(route.tvMode);
         renderAll();
     };
 

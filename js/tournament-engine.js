@@ -28,6 +28,8 @@ export const DEFAULT_CONFIG = {
     pointCap: 0,
     levelsCount: 3,
     levelNames: ['Level 1', 'Level 2', 'Level 3'],
+    levelOrder: [1, 2, 3],
+    levelOrderB: [1, 2, 3],
     doubleRoundRobin: false,
     registrationOpen: true,
     awardsVisibility: 'public',
@@ -64,6 +66,158 @@ export function getPairLabel(teamCode, levelIndex) {
     return `${teamCode}${levelIndex}`;
 }
 
+/**
+ * Normalizes a 1-based level court order permutation [1..levelsCount].
+ * Accepts an array (e.g. [3, 2, 1]) or delimiter-separated string ("3-2-1", "3,2,1").
+ * Ensures every level from 1..levelsCount appears exactly once in the order they take the court.
+ */
+export function normalizeLevelOrder(rawOrder, levelsCount = 3) {
+    const count = Math.max(1, Math.min(8, Number(levelsCount) || 3));
+    let tokens = [];
+    if (Array.isArray(rawOrder)) {
+        tokens = rawOrder;
+    } else if (typeof rawOrder === 'string' && rawOrder.trim()) {
+        tokens = rawOrder.trim().split(/[\s,\->/|]+/);
+    }
+
+    const seen = new Set();
+    const result = [];
+    for (const item of tokens) {
+        const lvl = Math.floor(Number(item));
+        if (Number.isFinite(lvl) && lvl >= 1 && lvl <= count && !seen.has(lvl)) {
+            seen.add(lvl);
+            result.push(lvl);
+        }
+    }
+    for (let lvl = 1; lvl <= count; lvl++) {
+        if (!seen.has(lvl)) {
+            seen.add(lvl);
+            result.push(lvl);
+        }
+    }
+    return result;
+}
+
+export function isDefaultLevelOrder(levelOrderA, levelOrderB = null, levelsCount = 3) {
+    const count = Math.max(1, Math.min(8, Number(levelsCount) || 3));
+    const orderA = normalizeLevelOrder(levelOrderA, count);
+    const orderB = levelOrderB ? normalizeLevelOrder(levelOrderB, count) : orderA;
+    for (let i = 0; i < count; i++) {
+        if (orderA[i] !== i + 1 || orderB[i] !== i + 1) return false;
+    }
+    return true;
+}
+
+/**
+ * Returns preset court entry orders for a given levelsCount (e.g. all 6 permutations for 3 levels).
+ */
+export function getLevelOrderPresets(levelsCount = 3, levelNames = []) {
+    const count = Math.max(1, Math.min(8, Number(levelsCount) || 3));
+    const getShortLbl = (lvl) => {
+        const custom = typeof levelNames[lvl - 1] === 'string' ? levelNames[lvl - 1].trim() : '';
+        return custom || `Level ${lvl}`;
+    };
+    if (count === 3) {
+        const perms = [
+            { order: [1, 2, 3], note: 'Mặc định: Level 1 ra sân trước' },
+            { order: [3, 2, 1], note: 'Đảo ngược: Level 3 ra sân trước' },
+            { order: [2, 3, 1], note: 'Level 2 ra sân trước → Lv3 → Lv1' },
+            { order: [2, 1, 3], note: 'Level 2 ra sân trước → Lv1 → Lv3' },
+            { order: [3, 1, 2], note: 'Level 3 ra sân trước → Lv1 → Lv2' },
+            { order: [1, 3, 2], note: 'Level 1 ra sân trước → Lv3 → Lv2' }
+        ];
+        return perms.map((p) => ({
+            key: p.order.join('-'),
+            order: p.order,
+            label: `${p.order.map((l) => getShortLbl(l)).join(' → ')} (${p.note})`
+        }));
+    }
+    const asc = Array.from({ length: count }, (_, i) => i + 1);
+    const desc = [...asc].reverse();
+    const list = [
+        {
+            key: asc.join('-'),
+            order: asc,
+            label: `${asc.map((l) => getShortLbl(l)).join(' → ')} (Mặc định: ${getShortLbl(1)} ra sân trước)`
+        }
+    ];
+    if (count > 1) {
+        list.push({
+            key: desc.join('-'),
+            order: desc,
+            label: `${desc.map((l) => getShortLbl(l)).join(' → ')} (Đảo ngược: ${getShortLbl(count)} ra sân trước)`
+        });
+    }
+    return list;
+}
+
+/**
+ * Builds the subMatches array for a single Team Match according to the chosen court entry order
+ * of Team A (levelOrderA) and Team B (levelOrderB).
+ * By default ([1, 2, 3] vs [1, 2, 3]), creates standard head-to-head Level 1, Level 2, Level 3.
+ * When a custom court order or cross-level lineup is chosen, sets format_override.displayOrder (1..levelsCount)
+ * and pairs each slot's Team A level vs Team B level in exact court sequence.
+ */
+export function buildTeamMatchSubMatches(tmId, teamAId, teamBId, pairLookup, options = {}) {
+    const levelsCount = Math.max(1, Math.min(8, Number(options.levelsCount) || 3));
+    const orderA = normalizeLevelOrder(options.levelOrderA ?? options.levelOrder, levelsCount);
+    const orderB = normalizeLevelOrder(options.levelOrderB ?? options.levelOrderA ?? options.levelOrder, levelsCount);
+    const hasCustomOrder = !isDefaultLevelOrder(orderA, orderB, levelsCount);
+
+    const lookupPairId = (teamId, lvl) => {
+        if (!pairLookup) return null;
+        const key = `${teamId}:${lvl}`;
+        if (typeof pairLookup.get === 'function') {
+            return pairLookup.get(key) || null;
+        }
+        return pairLookup[key] || null;
+    };
+
+    const subs = [];
+    for (let slotIdx = 0; slotIdx < levelsCount; slotIdx++) {
+        const displayOrder = slotIdx + 1;
+        const lvlA = orderA[slotIdx];
+        const lvlB = orderB[slotIdx];
+        const isCrossLevel = lvlA !== lvlB;
+        const levelIndex = isCrossLevel ? lvlA : lvlA;
+        const formatOverride = {};
+        if (hasCustomOrder) {
+            formatOverride.displayOrder = displayOrder;
+        }
+        if (isCrossLevel) {
+            formatOverride.levelA = lvlA;
+            formatOverride.levelB = lvlB;
+        }
+        const cleanOverride = Object.keys(formatOverride).length > 0 ? formatOverride : null;
+        const subIdSuffix = isCrossLevel ? `s${displayOrder}_l${lvlA}v${lvlB}` : `l${lvlA}`;
+
+        subs.push({
+            id: `${tmId}_${subIdSuffix}`,
+            team_match_id: tmId,
+            level_index: levelIndex,
+            pair_a_id: lookupPairId(teamAId, lvlA),
+            pair_b_id: lookupPairId(teamBId, lvlB),
+            sets: [{ a: 0, b: 0 }],
+            status: 'upcoming',
+            winner_override: null,
+            format_override: cleanOverride
+        });
+    }
+    return subs;
+}
+
+export function resolveSubMatchDivisionLabel(subMatch, config, pairA = null, pairB = null) {
+    const normCfg = normalizeConfig(config);
+    const lvlA = Number(pairA?.level_index) || Number(subMatch?.format_override?.levelA) || Number(subMatch?.level_index) || 1;
+    const lvlB = Number(pairB?.level_index) || Number(subMatch?.format_override?.levelB) || Number(subMatch?.level_index) || 1;
+    const nameA = normCfg.levelNames[lvlA - 1] || `Level ${lvlA}`;
+    const nameB = normCfg.levelNames[lvlB - 1] || `Level ${lvlB}`;
+    if (lvlA !== lvlB) {
+        return `${nameA} vs ${nameB}`;
+    }
+    return nameA;
+}
+
 export function normalizeConfig(rawConfig) {
     const merged = { ...DEFAULT_CONFIG, ...(rawConfig || {}) };
     const levelsCount = Math.max(1, Math.min(8, Number(merged.levelsCount) || 3));
@@ -73,6 +227,8 @@ export function normalizeConfig(rawConfig) {
         const custom = typeof rawNames[i - 1] === 'string' ? rawNames[i - 1].trim() : '';
         levelNames.push(custom || `Level ${i}`);
     }
+    const levelOrder = normalizeLevelOrder(merged.levelOrder, levelsCount);
+    const levelOrderB = normalizeLevelOrder(merged.levelOrderB ?? merged.levelOrder, levelsCount);
     const awardsVisibility = AWARDS_VISIBILITY_MODES.includes(merged.awardsVisibility)
         ? merged.awardsVisibility
         : 'public';
@@ -88,6 +244,8 @@ export function normalizeConfig(rawConfig) {
         pointCap: Math.max(0, Number(merged.pointCap) || 0),
         levelsCount,
         levelNames,
+        levelOrder,
+        levelOrderB,
         doubleRoundRobin: Boolean(merged.doubleRoundRobin),
         registrationOpen: merged.registrationOpen !== false,
         awardsVisibility,
@@ -697,6 +855,7 @@ export function swapRallyCourtOrder(rawRally, side, pairA, pairB) {
 
 /**
  * Updates the active server or receiver role while keeping them on opposite sides.
+ * When changing server within the already-serving team, preserves the current receiver selection for maximum flexibility.
  */
 export function selectRallyRole(rawRally, role, slot, pairA, pairB) {
     const cur = normalizeRallyState(rawRally, pairA, pairB);
@@ -709,7 +868,10 @@ export function selectRallyRole(rawRally, role, slot, pairA, pairB) {
         const serverOrder = nextSide === 'a' ? cur.orderA : cur.orderB;
         const oppOrder = nextSide === 'a' ? cur.orderB : cur.orderA;
         const serverIdx = Math.max(0, serverOrder.indexOf(slot));
-        const nextReceiver = oppOrder[serverIdx] ?? oppOrder[0];
+        const keepCurrentReceiver = nextSide === prevSide && oppOrder.includes(cur.receiverSlot);
+        const nextReceiver = keepCurrentReceiver
+            ? cur.receiverSlot
+            : (oppOrder[serverIdx] ?? oppOrder[0]);
         return normalizeRallyState({
             ...cur,
             serverSlot: slot,
@@ -734,6 +896,35 @@ export function selectRallyRole(rawRally, role, slot, pairA, pairB) {
     }
 
     return cur;
+}
+
+/**
+ * Handles court drag-and-drop between two player zones:
+ * - Same team side (e.g. a1 <-> a2): swaps court positions 1 (Right) <-> 2 (Left).
+ * - Across the net (e.g. a1 -> b2): sets sourceSlot as Server (Phát) and targetSlot as Receiver (Đỡ).
+ */
+export function applyCourtDragDrop(rawRally, sourceSlot, targetSlot, pairA, pairB) {
+    const cur = normalizeRallyState(rawRally, pairA, pairB);
+    const src = String(sourceSlot || '').trim();
+    const dst = String(targetSlot || '').trim();
+    const allValid = new Set([...cur.orderA, ...cur.orderB]);
+    if (!src || !dst || src === dst || !allValid.has(src) || !allValid.has(dst)) {
+        return cur;
+    }
+
+    const srcSide = src.startsWith('a') ? 'a' : 'b';
+    const dstSide = dst.startsWith('a') ? 'a' : 'b';
+    if (srcSide === dstSide) {
+        return swapRallyCourtOrder(cur, srcSide, pairA, pairB);
+    }
+
+    const prevServerSide = cur.serverSlot.startsWith('a') ? 'a' : 'b';
+    return normalizeRallyState({
+        ...cur,
+        serverSlot: src,
+        receiverSlot: dst,
+        serveTurn: srcSide !== prevServerSide ? 1 : cur.serveTurn
+    }, pairA, pairB);
 }
 
 /**
@@ -1699,6 +1890,8 @@ export function generateRoundRobinSchedule(teams, teamPairs, options = {}) {
     const doubleRR = Boolean(options.doubleRoundRobin);
     const tournamentId = options.tournamentId || 'main';
     const startSort = Number(options.startSortOrder) || 1;
+    const levelOrderA = normalizeLevelOrder(options.levelOrderA ?? options.levelOrder, levelsCount);
+    const levelOrderB = normalizeLevelOrder(options.levelOrderB ?? options.levelOrderA ?? options.levelOrder, levelsCount);
 
     // Reverse the rotating tail so Round 1 pairs adjacent seeds (A vs B, C vs D for 4 teams)
     const circle = [orderedTeams[0], ...orderedTeams.slice(1).reverse()];
@@ -1764,19 +1957,12 @@ export function generateRoundRobinSchedule(teams, teamPairs, options = {}) {
                     note: ''
                 });
 
-                for (let lvl = 1; lvl <= levelsCount; lvl++) {
-                    subMatches.push({
-                        id: `${tmId}_l${lvl}`,
-                        team_match_id: tmId,
-                        level_index: lvl,
-                        pair_a_id: pairLookup.get(`${teamA.id}:${lvl}`) || null,
-                        pair_b_id: pairLookup.get(`${teamB.id}:${lvl}`) || null,
-                        sets: [{ a: 0, b: 0 }],
-                        status: 'upcoming',
-                        winner_override: null,
-                        format_override: null
-                    });
-                }
+                const matchSubs = buildTeamMatchSubMatches(tmId, teamA.id, teamB.id, pairLookup, {
+                    levelsCount,
+                    levelOrderA,
+                    levelOrderB
+                });
+                subMatches.push(...matchSubs);
             });
 
             // Rotate circle[1..m-1]
