@@ -28,7 +28,8 @@ import {
     sanitizeRegistrationPayload,
     selectRallyRole,
     swapRallyCourtOrder,
-    syncTeamPairsWithRegistrationChange
+    syncTeamPairsWithRegistrationChange,
+    toggleRallyFixedOrder
 } from './tournament-engine.js';
 import {
     REGISTRATION_TABLE_SQL,
@@ -1404,6 +1405,25 @@ async function handleAction(action, el, event) {
         const { pairA, pairB } = getSubMatchPairObjects(sm);
         const cur = getSetRallyState(subId, setIdx, pairA, pairB);
         setSetRallyState(subId, setIdx, swapRallyCourtOrder(cur, side, pairA, pairB));
+        renderAll();
+        return;
+    }
+
+    if (action === 'toggle-fixed-order') {
+        if (!appState.isAdmin || !appState.data) return;
+        const subId = el.dataset.subId;
+        const setIdx = Number(el.dataset.setIdx);
+        const side = el.dataset.side;
+        const sm = appState.data.subMatches.find((x) => x.id === subId);
+        if (!sm) return;
+        const { pairA, pairB } = getSubMatchPairObjects(sm);
+        const cur = getSetRallyState(subId, setIdx, pairA, pairB);
+        const next = toggleRallyFixedOrder(cur, side, pairA, pairB);
+        setSetRallyState(subId, setIdx, next);
+        const isNowOn = side === 'a' ? next.fixedA : next.fixedB;
+        showToast(isNowOn
+            ? 'Đã BẬT Cố định vị trí (Stacking): khi hết lượt phát, cặp sẽ tự động trả về vị trí Phải/Trái hiện tại.'
+            : 'Đã TẮT Cố định vị trí: giữ nguyên vị trí luân chuyển thông thường.');
         renderAll();
         return;
     }

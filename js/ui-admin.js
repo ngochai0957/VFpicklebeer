@@ -227,6 +227,7 @@ function buildPlayerStatSideHtml(subId, setIdx, playersMeta, statsRow, teamColor
     const halfModeTag = isServingSide
         ? '<span class="serving-side-tag is-attack">Tấn công</span>'
         : '<span class="serving-side-tag is-defense">Phòng thủ</span>';
+    const isFixedOrder = sideKey === 'a' ? Boolean(rallyState.fixedA) : Boolean(rallyState.fixedB);
 
     return `
         <div class="set-player-side court-half ${isServingSide ? 'is-serving-side is-attack-half' : 'is-receiving-side is-defense-half'}" data-court-half="${escapeHtml(sideKey)}" data-court-pos="${escapeHtml(courtHalfPosition)}" style="--side-color:${escapeHtml(teamColor)};">
@@ -237,7 +238,7 @@ function buildPlayerStatSideHtml(subId, setIdx, playersMeta, statsRow, teamColor
                     ${halfModeTag}
                 </div>
                 ${orderedSlots.length > 1
-            ? `<button type="button" class="btn-swap-court" data-action="swap-court-order" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-side="${escapeHtml(sideKey)}" title="Đổi vị trí 1 (Phải) ↔ 2 (Trái) cho cặp này">⇄ Đổi vị trí 1-2</button>`
+            ? `<button type="button" class="btn-swap-court btn-fixed-court ${isFixedOrder ? 'is-active' : ''}" data-action="toggle-fixed-order" data-sub-id="${escapeHtml(subId)}" data-set-idx="${setIdx}" data-side="${escapeHtml(sideKey)}" aria-pressed="${isFixedOrder ? 'true' : 'false'}" title="Bật Cố định vị trí (Stacking): khi đang phát ăn điểm vẫn đổi ô Phải↔Trái theo luật, nhưng khi hết lượt chuyển về Phòng thủ sẽ tự động trả 2 người chơi về đúng vị trí Phải/Trái cố định ban đầu (kéo thả ô để đổi vị trí gốc)">📌 Cố định vị trí: ${isFixedOrder ? 'ON' : 'OFF'}</button>`
             : ''
         }
             </div>

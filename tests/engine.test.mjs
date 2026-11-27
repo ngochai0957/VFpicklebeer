@@ -42,7 +42,8 @@ import {
     summarizeRegistrations,
     summarizeSetRallyLog,
     syncTeamPairsWithRegistrationChange,
-    swapRallyCourtOrder
+    swapRallyCourtOrder,
+    toggleRallyFixedOrder
 } from '../js/tournament-engine.js';
 import { createInitialDemoState } from '../js/demo-data.js';
 import {
@@ -624,7 +625,11 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
         receiverSlot: 'b1',
         serveTurn: 2,
         orderA: ['a1', 'a2'],
-        orderB: ['b1', 'b2']
+        orderB: ['b1', 'b2'],
+        fixedA: false,
+        fixedB: false,
+        fixedOrderA: ['a1', 'a2'],
+        fixedOrderB: ['b1', 'b2']
     });
 
     // Swapping pair B Start positions (1 <-> 2) puts b2 at Pos 1 (Right) and b1 at Pos 2 (Left)
@@ -747,7 +752,8 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     assert.ok(adminHtml.includes('tấn công'));
     assert.ok(adminHtml.includes('phòng thủ'));
     assert.ok(adminHtml.includes('Phát hỏng'));
-    assert.ok(adminHtml.includes('data-action="swap-court-order"'));
+    assert.ok(adminHtml.includes('data-action="toggle-fixed-order"'));
+    assert.ok(adminHtml.includes('📌 Cố định vị trí: OFF'));
     assert.ok(adminHtml.includes('1 · Phải'));
     assert.ok(adminHtml.includes('2 · Trái'));
     assert.ok(adminHtml.includes('data-action="select-rally-role"'));
@@ -803,6 +809,31 @@ test('Doubles serve turn 1/2, court order 1/2 swap, alternating receiver on scor
     dragRally = selectRallyRole(dragRally, 'server', 'b1', pairA, pairB);
     assert.equal(dragRally.serverSlot, 'b1');
     assert.equal(dragRally.receiverSlot, 'a1');
+
+    // Fixed Position (Stacking) ON: swaps normally while attacking/serving, but restores home anchor [a1, a2] on Side-Out regardless of 1 point or 2 points scored
+    let stackRally = normalizeRallyState(null, pairA, pairB);
+    stackRally = toggleRallyFixedOrder(stackRally, 'a', pairA, pairB);
+    assert.equal(stackRally.fixedA, true);
+    assert.deepEqual(stackRally.fixedOrderA, ['a1', 'a2']);
+
+    // Case A: 0-0-2 -> score 1 point (1-0-2) -> orderA swaps to ['a2', 'a1'] during attack -> then lose rally (Side-Out to 0-1-1) -> orderA auto-restores to ['a1', 'a2'] so a1 is at Right court to receive!
+    let stackStats = normalizeSetPlayerStats(null, 1)[0];
+    let stackScore = { a: 0, b: 0 };
+    let step1 = applyRallyOutcomeToSet(stackStats, stackScore, stackRally, 'server-attack', pairA, pairB);
+    assert.deepEqual(step1.rally.orderA, ['a2', 'a1']); // Swapped while serving at 1-0-2
+    let step2 = applyRallyOutcomeToSet(step1.statRow, step1.setScore, step1.rally, 'serve-fault', pairA, pairB);
+    assert.equal(step2.rally.serverSlot, 'b1');
+    assert.equal(step2.rally.serveTurn, 1);
+    assert.deepEqual(step2.rally.orderA, ['a1', 'a2']); // Restored to fixed home order on Side-Out!
+    assert.equal(step2.rally.receiverSlot, 'a1'); // a1 receives at Right court!
+
+    // Case B: score 2 points on Serve 2 -> orderA swaps twice back to ['a1', 'a2'] -> then lose rally (Side-Out) -> still stays ['a1', 'a2']!
+    let twoPt1 = applyRallyOutcomeToSet(stackStats, stackScore, stackRally, 'server-attack', pairA, pairB);
+    let twoPt2 = applyRallyOutcomeToSet(twoPt1.statRow, twoPt1.setScore, twoPt1.rally, 'partner-attack', pairA, pairB);
+    assert.deepEqual(twoPt2.rally.orderA, ['a1', 'a2']);
+    let twoPtOut = applyRallyOutcomeToSet(twoPt2.statRow, twoPt2.setScore, twoPt2.rally, 'serve-fault', pairA, pairB);
+    assert.deepEqual(twoPtOut.rally.orderA, ['a1', 'a2']);
+    assert.equal(twoPtOut.rally.receiverSlot, 'a1');
 });
 
 test('Google-Form-style player registration page and Admin registrations dashboard', () => {

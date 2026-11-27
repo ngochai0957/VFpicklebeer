@@ -2344,6 +2344,18 @@ textarea:focus-visible {
         color: var(--primary);
     }
 
+    .btn-fixed-court.is-active {
+        background: var(--side-color, var(--primary));
+        border-color: var(--side-color, var(--primary));
+        color: #ffffff;
+        box-shadow: 0 2px 6px color-mix(in srgb, var(--side-color, var(--primary)) 28%, transparent);
+    }
+
+    .btn-fixed-court.is-active:hover {
+        color: #ffffff;
+        opacity: 0.92;
+    }
+
     .court-pos-badge {
         font-size: 10px;
         font-weight: 600;

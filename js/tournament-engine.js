@@ -818,6 +818,10 @@ export function normalizeRallyState(rawRally, pairA, pairB) {
     const slotsB = getSideSlotKeys('b', pairB);
     const orderA = normalizeSideOrder(rawRally?.orderA, slotsA);
     const orderB = normalizeSideOrder(rawRally?.orderB, slotsB);
+    const fixedA = Boolean(rawRally?.fixedA);
+    const fixedB = Boolean(rawRally?.fixedB);
+    const fixedOrderA = normalizeSideOrder(rawRally?.fixedOrderA, orderA);
+    const fixedOrderB = normalizeSideOrder(rawRally?.fixedOrderB, orderB);
     const allSlots = new Set([...orderA, ...orderB]);
 
     const rawServer = String(rawRally?.serverSlot || '');
@@ -832,11 +836,22 @@ export function normalizeRallyState(rawRally, pairA, pairB) {
     const serveTurn = serverOrder.length > 1
         ? (rawRally?.serveTurn == null ? 2 : (Number(rawRally.serveTurn) === 2 ? 2 : 1))
         : 1;
-    return { serverSlot, receiverSlot, serveTurn, orderA, orderB };
+    return {
+        serverSlot,
+        receiverSlot,
+        serveTurn,
+        orderA,
+        orderB,
+        fixedA,
+        fixedB,
+        fixedOrderA,
+        fixedOrderB
+    };
 }
 
 /**
  * Swaps Position 1 (Right/Even) <-> Position 2 (Left/Odd) for a pair inside a Set.
+ * When manually swapped (via button or drag-and-drop), also updates that pair's fixed anchor order.
  */
 export function swapRallyCourtOrder(rawRally, side, pairA, pairB) {
     const cur = normalizeRallyState(rawRally, pairA, pairB);
@@ -849,8 +864,36 @@ export function swapRallyCourtOrder(rawRally, side, pairA, pairB) {
     return {
         ...cur,
         orderA: nextOrderA,
-        orderB: nextOrderB
+        orderB: nextOrderB,
+        fixedOrderA: side === 'a' ? [...nextOrderA] : cur.fixedOrderA,
+        fixedOrderB: side === 'b' ? [...nextOrderB] : cur.fixedOrderB
     };
+}
+
+/**
+ * Toggles Fixed Position (Stacking) ON/OFF for a pair ('a' | 'b').
+ * When turned ON, captures the pair's current [Right, Left] order as its fixed home anchor
+ * so that whenever the pair finishes its service turn (Side-Out), it automatically returns to this exact order.
+ */
+export function toggleRallyFixedOrder(rawRally, side, pairA, pairB) {
+    const cur = normalizeRallyState(rawRally, pairA, pairB);
+    if (side === 'a') {
+        const nextFixedA = !cur.fixedA;
+        return {
+            ...cur,
+            fixedA: nextFixedA,
+            fixedOrderA: nextFixedA ? [...cur.orderA] : cur.fixedOrderA
+        };
+    }
+    if (side === 'b') {
+        const nextFixedB = !cur.fixedB;
+        return {
+            ...cur,
+            fixedB: nextFixedB,
+            fixedOrderB: nextFixedB ? [...cur.orderB] : cur.fixedOrderB
+        };
+    }
+    return cur;
 }
 
 /**
@@ -947,10 +990,19 @@ export function advanceRallyServeTurn(rawRally, pairA, pairB) {
         };
     }
 
+    // Side-out: if the outgoing serving team has Fixed Position (Stacking) enabled,
+    // restore their home [Right, Left] anchor order regardless of how many odd/even points they scored.
+    const nextOrderA = serverSide === 'a' && cur.fixedA ? [...cur.fixedOrderA] : cur.orderA;
+    const nextOrderB = serverSide === 'b' && cur.fixedB ? [...cur.fixedOrderB] : cur.orderB;
+    const nextNewServerOrder = serverSide === 'a' ? nextOrderB : nextOrderA;
+    const nextNewReceiverOrder = serverSide === 'a' ? nextOrderA : nextOrderB;
+
     return {
         ...cur,
-        serverSlot: oppOrder[0],
-        receiverSlot: serverOrder[0],
+        orderA: nextOrderA,
+        orderB: nextOrderB,
+        serverSlot: nextNewServerOrder[0],
+        receiverSlot: nextNewReceiverOrder[0],
         serveTurn: 1
     };
 }
